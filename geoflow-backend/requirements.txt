@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+geopandas>=1.0
+pyogrio
+matplotlib
+osmnx>=2.0
+requests
+Pillow>=10
+PyMuPDF
+scipy
+rasterio

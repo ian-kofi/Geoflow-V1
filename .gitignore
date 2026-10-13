@@ -1,0 +1,25 @@
+# Original prototype backend, kept locally only
+/Main.py
+
+# Installed packages (recreated by pip install / npm install)
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# Data GeoFlow downloads or generates while running (can be large)
+geoflow-backend/files/
+geoflow-backend/outputs/
+geoflow-backend/uploads/
+geoflow-backend/cache/
+
+# Frontend build output and local settings
+geoflow-project/dist/
+*.local
+.vite/
+
+# Editor / OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
