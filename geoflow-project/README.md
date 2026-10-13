@@ -36,7 +36,7 @@ Set `VITE_API_URL` if the backend is not on `http://localhost:8000`.
 | Location | – | `location` |
 | Boundary | location | boundary GeoJSON, bounds, preview PNG |
 | Satellite | location or Boundary | Esri imagery mosaic + exact tile bounds |
-| OSM Layer | location or Boundary | roads / highways / railways / waterways / buildings GeoJSON + preview |
+| OSM Layer | location or Boundary | roads / highways / railways / waterways / rivers (main rivers & canals) / buildings GeoJSON + preview |
 | Country Shape | location | Natural Earth SVG (shapefile auto-downloaded or uploaded as a folder) |
 | Rasterizer | Country Shape (SVG) | PNG at chosen DPI (rasters pass through) |
 | Composite | Boundary (+ Satellite, Layers) | aligned composite PNG |

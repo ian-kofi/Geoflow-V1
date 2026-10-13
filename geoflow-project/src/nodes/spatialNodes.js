@@ -151,8 +151,12 @@ export const SPATIAL_NODE_TYPES = {
     category: 'terrain',
     icon: 'droplet',
     description:
-      'How many metres each place sits above the river it drains into. Places only a few metres above their river flood first, so this is the key terrain input for flood mapping. Works out rivers and drainage from Ground height data.',
-    defaults: { minArea: 1 },
+      'How many metres each place sits above the river it drains into. Places only a few metres above their river flood first, so this is the key terrain input for flood mapping. Works out rivers from Ground height data, and adds any rivers you connect to Rivers (important for flat land and big rivers that start outside your area). GIS term: HAND, with stream burning.',
+    inputs: [
+      { id: 'dem', label: 'Ground height' },
+      { id: 'rivers', label: 'Rivers (optional)' },
+    ],
+    defaults: { minArea: 1, terrainStreams: 'auto' },
     params: [
       {
         key: 'minArea',
@@ -161,6 +165,13 @@ export const SPATIAL_NODE_TYPES = {
         min: 0.1,
         step: 0.5,
         hint: 'About 1 includes small streams; 10–50 keeps only larger rivers.',
+      },
+      {
+        key: 'terrainStreams',
+        label: 'Work out streams from the terrain',
+        type: 'segmented',
+        options: [['auto', 'Auto'], ['yes', 'Yes'], ['no', 'No']],
+        hint: 'Auto: when Rivers are connected and the land is flat (under 40 m from low to high), only the connected rivers are used, because streams traced on flat ground are unreliable.',
       },
     ],
     summary: (d) => `Rivers from ${d.minArea} km²`,

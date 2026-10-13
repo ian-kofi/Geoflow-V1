@@ -136,19 +136,51 @@ def contours(ctx: Context):
                          details={"Interval": f"{interval:g} m", "Levels": str(lines['elevation'].nunique())})
 
 
+LOWLAND_RELIEF_M = 40   # York 23 m, Hull 9 m, Lagos 22 m vs Accra 71 m, Akosombo 270 m
+
+
 def height_above_river(ctx: Context):
     """HAND: each cell's height above the river it drains into (flood susceptibility)."""
-    dem = _dem(ctx)
+    # Older saves connect the DEM without a handle name; anything not on 'rivers' is the DEM.
+    dem_parents = [p for p in ctx.parents if p.get("_input") != "rivers"]
+    dem = Context(ctx.node_type, ctx.params, dem_parents, ctx.tag, ctx.location, ctx.place,
+                  safe_path=ctx.safe_path).raster_input(label="a DEM (e.g. Satellite & Elevation Data → Copernicus DEM)")
     if dem.crs.is_geographic:
         raise InputError("Height Above River needs a DEM in metres (e.g. from Satellite & Elevation Data).")
     dx, dy = pixel_size_m(dem)
     min_area = ctx.number("minArea", 1.0, 0.05, 10_000)
-    hand, streams, details = hydrology.height_above_drainage(dem.data[0], dx, dy, min_area)
+    rivers = _river_mask(ctx, dem) if ctx.inputs("rivers") else None
+    # In low-relief land, streams traced from a 30 m surface model follow noise (hedges, buildings,
+    # trees) rather than real channels, so with a river map connected only mapped rivers count.
+    z = dem.data[0]
+    relief = float(np.nanpercentile(z, 95) - np.nanpercentile(z, 5)) if np.isfinite(z).any() else 0.0
+    mode = ctx.choice("terrainStreams", ("auto", "yes", "no"), "auto")
+    derive = mode == "yes" or (mode == "auto" and (rivers is None or relief >= LOWLAND_RELIEF_M))
+    hand, streams, details = hydrology.height_above_drainage(z, dx, dy, min_area, rivers, derive)
+    if mode == "auto" and rivers is not None and not derive:
+        details["Streams from terrain"] = f"skipped: low-lying area ({relief:.0f} m of relief), mapped rivers only"
     preview = {"mode": "continuous", "cmap": "YlGnBu_r", "vmin": 0, "vmax": 30, "unit": "m",
                "label": "Height above nearest river"}
     output = raster_result(dem.with_data(hand[None], ["hand"]), "hand", ctx.tag, preview, details)
     output["details"]["How to read"] = "0–5 m: floods first · 5–15 m: occasional · above 15 m: rarely floods"
     return output
+
+
+def _river_mask(ctx, dem):
+    """Known rivers on the DEM grid: lines/areas (e.g. Map Features → Main rivers) or a raster
+    where cells above 0 are water."""
+    for parent in ctx.inputs("rivers"):
+        path = ctx.safe_path(parent.get("rasterPath"))
+        if path:
+            water = align_to(read_raster(path), dem, Resampling.nearest).data[0]
+            return np.nan_to_num(water, nan=0) > 0
+    features = ctx.vector_input("rivers", label="river lines")
+    features = features[features.geometry.notna() & ~features.geometry.is_empty]
+    if features.empty:
+        return np.zeros(dem.data.shape[1:], dtype=bool)
+    shapes = ((geom, 1) for geom in features.to_crs(dem.crs).geometry)
+    return rasterize(shapes, out_shape=dem.data.shape[1:], transform=dem.transform, fill=0, dtype="uint8",
+                     all_touched=True).astype(bool)
 
 
 # ---- Raster algorithms ------------------------------------------------------

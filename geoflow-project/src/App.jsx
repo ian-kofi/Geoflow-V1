@@ -35,6 +35,7 @@ const TRANSIENT_STATUS = new Set(['queued', 'running']);
 function sanitize({ nodes = [], edges = [] }) {
   const valid = nodes.filter((n) => NODE_TYPES[n.type]);
   const ids = new Set(valid.map((n) => n.id));
+  const typeOf = new Map(valid.map((n) => [n.id, n.type]));
   return {
     nodes: valid.map(({ id, type, position, data, width, height }) => {
       const { geoFiles, startedAt, ...rest } = data ?? {};
@@ -48,12 +49,11 @@ function sanitize({ nodes = [], edges = [] }) {
     }),
     edges: edges
       .filter((e) => ids.has(e.source) && ids.has(e.target))
-      .map(({ id, source, target, targetHandle }) => ({
-        id: id ?? `e_${source}_${target}`,
-        source,
-        target,
-        ...(targetHandle ? { targetHandle } : {}),
-      })),
+      .map(({ id, source, target, targetHandle }) => {
+        // Saved before the node had named inputs: connect to its first one.
+        const handle = targetHandle ?? NODE_TYPES[typeOf.get(target)].inputs?.[0]?.id;
+        return { id: id ?? `e_${source}_${target}`, source, target, ...(handle ? { targetHandle: handle } : {}) };
+      }),
   };
 }
 

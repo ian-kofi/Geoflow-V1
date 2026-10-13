@@ -17,6 +17,7 @@ const LAYER_OPTIONS = [
   ['highways', 'Main roads & highways'],
   ['railways', 'Railways'],
   ['waterways', 'Rivers & streams'],
+  ['rivers', 'Main rivers & canals'],
   ['buildings', 'Buildings (towns & cities only)'],
 ];
 

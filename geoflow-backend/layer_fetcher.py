@@ -20,6 +20,7 @@ LAYER_TAGS = {
     "highways": {"highway": MAJOR_ROADS},
     "railways": {"railway": ["rail", "subway", "tram", "light_rail", "narrow_gauge"]},
     "waterways": {"waterway": ["river", "stream", "canal"]},
+    "rivers": {"waterway": ["river", "canal"]},
     "buildings": {"building": True},
 }
 POLYGON_LAYERS = {"buildings"}

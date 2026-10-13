@@ -17,6 +17,7 @@ LAYER_COLORS = {
     "highways": "#f97316",
     "railways": "#3baaff",
     "waterways": "#22c55e",
+    "rivers": "#0284c7",
     "buildings": "#ef4444",
     "default": "#ffffff",
 }

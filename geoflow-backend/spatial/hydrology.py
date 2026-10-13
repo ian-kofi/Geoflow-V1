@@ -91,23 +91,43 @@ def flow_accumulation(filled, downstream):
     return accumulation.reshape(filled.shape)
 
 
-def height_above_drainage(dem, dx, dy, min_area_km2=1.0):
-    """Returns (hand, streams, details). `dem` is a 2-D array in metres on a projected grid."""
+BURN_DEPTH_M = 10.0
+
+
+def height_above_drainage(dem, dx, dy, min_area_km2=1.0, rivers=None, derive_streams=True):
+    """Returns (hand, streams, details). `dem` is a 2-D array in metres on a projected grid.
+
+    `rivers` is an optional boolean mask of known river cells (e.g. mapped rivers). Rivers
+    worked out from the DEM alone miss big rivers whose catchment lies mostly outside the
+    area (York's Ouse drains ~3,300 km² upstream), so known rivers are added to them: they
+    are carved into the DEM ("stream burning") so flow reaches them, and HAND is measured
+    on the uncarved ground. With `derive_streams` False only the known rivers count.
+    """
     if dem.size > MAX_CELLS:
         raise InputError(f"The DEM is too large for hydrology ({dem.size:,} cells). Cut it to a smaller outline first.")
     if not np.isfinite(dem).any():
         raise InputError("The DEM has no valid heights.")
 
-    filled = fill_depressions(dem)
-    downstream = flow_directions(filled, dx, dy)
-    accumulation = flow_accumulation(filled, downstream)
+    valid = np.isfinite(dem)
+    mapped = rivers & valid if rivers is not None else np.zeros(dem.shape, dtype=bool)
+    filled = fill_depressions(dem)                           # true ground, for measuring heights
+    routed = fill_depressions(np.where(mapped, dem - BURN_DEPTH_M, dem)) if mapped.any() else filled
+    downstream = flow_directions(routed, dx, dy)
+    accumulation = flow_accumulation(routed, downstream)
 
     cell_km2 = float(np.mean(dx) * dy) / 1e6
     threshold_cells = max(min_area_km2 / cell_km2, 10)
-    streams = (accumulation >= threshold_cells) & np.isfinite(filled)
+    derive_streams = derive_streams or not mapped.any()
+    streams = ((accumulation >= threshold_cells) & valid) | mapped if derive_streams else mapped
     if not streams.any():
         raise InputError(f"No rivers draining at least {min_area_km2:g} km² inside this area. "
                          "Lower 'Smallest river' or use a larger outline.")
+    notes = [f"draining ≥ {min_area_km2:g} km²"] if derive_streams else []
+    if mapped.any():
+        notes.append("the connected river map, carved into the terrain")
+    river_note = " plus ".join(notes).capitalize() + f" ({int(streams.sum()):,} river cells)"
+    if rivers is not None and not mapped.any():
+        river_note += "; the connected rivers don't cross this area"
 
     # Follow every flow path down to its first river cell by pointer jumping:
     # each step doubles the distance followed, so long paths take ~log2(n) steps.
@@ -125,7 +145,7 @@ def height_above_drainage(dem, dx, dy, min_area_km2=1.0):
     hand = np.clip((flat - flat[target]).reshape(dem.shape), 0, None)
     hand[~np.isfinite(dem)] = np.nan
     details = {
-        "Rivers": f"draining ≥ {min_area_km2:g} km² ({int(streams.sum()):,} river cells)",
+        "Rivers": river_note,
         "Measured from the map edge": (f"{100 * float(np.mean(~reached_river[np.isfinite(flat)])):.1f}% of cells "
                                        "(their water leaves the area before reaching a river)"),
     }

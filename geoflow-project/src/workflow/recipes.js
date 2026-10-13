@@ -115,18 +115,21 @@ export const RECIPES = [
     title: 'Flood risk',
     description: 'Low, Moderate and High flood susceptibility from terrain, rivers and past flooding.',
     icon: 'droplet',
-    time: 'about 30 seconds for a town or district',
+    time: 'about a minute for a town or district',
     build: (place) => {
       const { location, outline } = start(place);
       const { dem, edges } = elevation(place, location, outline);
+      // Mapped rivers, so big rivers that rise outside the area still count (York's Ouse).
+      const rivers = createNode('LayerNode', { x: COL * 2, y: -220 }, { layerType: 'rivers' });
       // HAND is computed on the full rectangle (fewer edge effects), then cut to the outline.
-      const hand = createNode('HandNode', { x: COL * 3, y: -40 }, { minArea: 1 });
+      // Plus streams traced from the terrain where it has enough relief for them to be reliable.
+      const hand = createNode('HandNode', { x: COL * 3, y: -40 }, { minArea: 1, terrainStreams: 'auto' });
       const handCut = createNode('ClipRasterNode', { x: COL * 4, y: -40 });
       const slope = createNode('SlopeNode', { x: COL * 3, y: 300 });
       const water = createNode('StacNode', { x: COL * 2, y: 480 }, { collection: 'jrc-gsw' });
       const overlay = createNode('WeightedOverlayNode', { x: COL * 5, y: 120 }, {
         resultName: 'Flood susceptibility',
-        weightA: 5, riskA: 'low', rangeA: '0, 15',    // 0 m above the river = full risk, 15 m+ = none
+        weightA: 5, riskA: 'low', rangeA: '0, 10',    // 0 m above the river = full risk, 10 m+ = none
         weightB: 2, riskB: 'low', rangeB: '0, 8',     // flat ground holds water
         weightC: 3, riskC: 'high', rangeC: '0, 25',   // underwater in ≥25% of observations since 1984 = full
         weightD: 0,
@@ -137,10 +140,12 @@ export const RECIPES = [
       // Flood maps conventionally use blues: pale = low, dark = high.
       const colours = createNode('ColourMapNode', { x: COL * 7, y: 120 }, { colormap: 'YlGnBu' });
       return finish(
-        [location, outline, dem, hand, handCut, slope, water, overlay, zones, colours],
+        [location, outline, dem, rivers, hand, handCut, slope, water, overlay, zones, colours],
         [
           ...edges,
-          edge(dem, hand),
+          edge(outline, rivers),
+          edge(dem, hand, 'dem'),
+          edge(rivers, hand, 'rivers'),
           edge(hand, handCut, 'raster'),
           edge(outline, handCut, 'mask'),
           edge(dem, slope),

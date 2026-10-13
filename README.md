@@ -6,9 +6,20 @@ map is an editable workflow of nodes, so GIS users can open it up, tune it and b
 
 ![Making a flood susceptibility map with the "Make a map" assistant](docs/make-a-map.gif)
 
+**United Kingdom**
+
+| Flood susceptibility · York | Steep slopes · Lake District | Hills & valleys · Eryri (Snowdonia) |
+|---|---|---|
+| ![Flood susceptibility map of York](docs/flood-york.jpg) | ![Slope classes map of the Lake District National Park](docs/slopes-lake-district.jpg) | ![Shaded terrain map of Eryri National Park](docs/terrain-eryri.jpg) |
+
+**Ghana**
+
 | Flood susceptibility · Accra | Hills & valleys · Akosombo | Steep slopes · Akosombo |
 |---|---|---|
 | ![Flood susceptibility map of Accra](docs/flood-accra.jpg) | ![Shaded terrain map of Akosombo](docs/terrain-akosombo.jpg) | ![Slope classes map of Akosombo](docs/slopes-akosombo.jpg) |
+
+Every map above was made with the same few clicks in the **Make a map** assistant; the same workflows run
+anywhere in the world.
 
 ## What it does
 
@@ -37,7 +48,7 @@ Only the new steps run; everything else comes from cache.
 
 ![The workflow canvas with the Flood risk workflow and its result](docs/canvas.png)
 
-![Flood susceptibility classes over satellite imagery on the expanded map](docs/map.png)
+![Flood susceptibility classes for York over satellite imagery on the expanded map](docs/map-york.png)
 
 ## How the flood analysis works
 
@@ -45,12 +56,20 @@ The **Flood risk** workflow is a terrain-based susceptibility screening (not a r
 determination, which requires hydraulic modelling):
 
 1. **Height Above Nearest Drainage (HAND).** The DEM is conditioned with priority-flood depression filling
-   (Barnes et al. 2014), flow is routed with D8, flow accumulation defines the river network, and every cell's
-   height above the river it drains to is computed. Cells a few metres above their river flood first.
-2. **Slope.** Flat ground holds water (Horn's method, as in ArcGIS/GDAL).
-3. **Water history.** How often each 30 m cell was observed underwater since 1984 (JRC Global Surface Water).
-4. **Weighted overlay.** Each factor is rescaled to 0–1 risk and combined (HAND 50%, water history 30%,
+   (Barnes et al. 2014), flow is routed with D8, and every cell's height above the river it drains to is
+   computed. Cells a few metres above their river flood first.
+2. **River network.** Mapped rivers and canals from OpenStreetMap are burned into the DEM, so large rivers
+   whose catchment lies outside the area still count (York's Ouse drains about 3,300 km² upstream, which a
+   DEM clipped to the city cannot see). In areas with enough relief (Accra), streams traced from flow
+   accumulation are added. In low-lying areas (York, under 40 m of relief), streams traced from a 30 m surface
+   model follow hedges and buildings rather than channels, so only mapped rivers are used.
+3. **Slope.** Flat ground holds water (Horn's method, as in ArcGIS/GDAL).
+4. **Water history.** How often each 30 m cell was observed underwater since 1984 (JRC Global Surface Water).
+5. **Weighted overlay.** Each factor is rescaled to 0–1 risk and combined (HAND 50%, water history 30%,
    slope 20%), then classed into Low / Moderate / High.
+
+In York the High class picks out the River Foss corridor, the Ouse washlands and the Derwent Ings, while the
+York moraine, the glacial ridge the city grew on, comes out Low.
 
 The same building blocks support other analyses, for example slope-stability classes, vegetation health from a
 cloud-free Sentinel-2 median composite, or district-level summaries with zonal statistics.
