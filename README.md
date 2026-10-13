@@ -1,10 +1,14 @@
 # GeoFlow
 
-**A node-based geospatial workflow app.** Pick a place and what you want to see, and GeoFlow fetches the
-data, runs the analysis and produces a finished map: no GIS software or expertise needed. Under the hood every
-map is an editable workflow of nodes, so GIS users can open it up, tune it and build their own.
+**A node-based geospatial workflow app.** Drag nodes onto a canvas and connect them to fetch data, run
+spatial analysis and produce a finished map, with no GIS software needed. For beginners, a **Make a map**
+assistant builds a ready-made workflow from a template, which you can then open up, tune and extend.
 
 ![Making a flood susceptibility map with the "Make a map" assistant](docs/make-a-map.gif)
+
+*Above: the **Make a map** assistant, a shortcut that builds a ready-made workflow from a template. GeoFlow is
+mainly a drag-and-drop node editor: you connect nodes in any combination to build your own analyses
+([see below](#build-your-own-workflow)).*
 
 **United Kingdom**
 
@@ -23,10 +27,11 @@ anywhere in the world.
 
 ## What it does
 
-- **Make a map assistant:** search a place, choose *Satellite photo, Hills & valleys, Steep slopes, Flood risk,
-  How green it is, Roads, Rivers & streams, Contour lines* or *Regions & borders*, and get a finished map.
-- **Visual workflow editor:** about 30 nodes you connect on a canvas, with independent branches run in parallel
-  and unchanged steps cached.
+- **Visual workflow editor:** about 30 nodes you drag onto a canvas and connect in any combination, with
+  independent branches run in parallel and unchanged steps cached.
+- **Make a map assistant (templates):** search a place, choose *Satellite photo, Hills & valleys, Steep slopes,
+  Flood risk, How green it is, Roads, Rivers & streams, Contour lines* or *Regions & borders*, and get a
+  finished, editable workflow.
 - **Real data, fetched live:** administrative boundaries, Sentinel-2 / Landsat imagery, the Copernicus 30 m DEM,
   JRC Global Surface Water (1984–2021) and OpenStreetMap features.
 - **Spatial analysis:** slope, aspect, ruggedness, hillshade, contours, Height Above Nearest Drainage (HAND),
@@ -35,6 +40,15 @@ anywhere in the world.
 - **Interactive map:** every result as a zoomable layer (rendered as tiles on demand, sharp at any zoom),
   with Map/Satellite basemaps.
 - **Export:** a print-ready JPEG with title, north arrow, scale bar and colour key, plus GeoTIFF, GeoJSON and CSV downloads.
+
+### Build your own workflow
+
+Templates are only a starting point. Every analysis is a chain of nodes you drag onto the canvas and
+connect, and different combinations give different results. Here a workflow is built from an empty canvas
+to map which way the slopes face across the Cairngorms. Then one node is swapped to map terrain ruggedness
+instead. On the second run the place, outline and elevation data come from cache.
+
+![Building a workflow from scratch by dragging and connecting nodes, then swapping one node](docs/build-workflow.gif)
 
 ### Modular by design
 
@@ -123,7 +137,6 @@ Planned next steps:
 - Validate flood susceptibility against official flood maps (e.g. Environment Agency Flood Zones)
 - Support higher-resolution elevation data where available (e.g. UK LiDAR)
 - Deploy a public demo
-
 
 ## License
 
