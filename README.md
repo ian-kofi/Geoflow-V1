@@ -25,6 +25,16 @@ map is an editable workflow of nodes, so GIS users can open it up, tune it and b
   with Map/Satellite basemaps.
 - **Export:** a print-ready JPEG with title, north arrow, scale bar and colour key, plus GeoTIFF, GeoJSON and CSV downloads.
 
+### Modular by design
+
+Every map is a workflow you can extend. Here the Flood risk workflow gets a roads overlay in under a minute:
+drag in a **Map Features** node, connect it to the outline, and stack it on the flood map with **Combine Layers**.
+Only the new steps run; everything else comes from cache.
+
+![Adding a roads overlay to the flood risk workflow by dragging and connecting two nodes](docs/add-roads.gif)
+
+![Flood susceptibility map of Accra with roads overlaid](docs/flood-roads-accra.jpg)
+
 ![The workflow canvas with the Flood risk workflow and its result](docs/canvas.png)
 
 ![Flood susceptibility classes over satellite imagery on the expanded map](docs/map.png)

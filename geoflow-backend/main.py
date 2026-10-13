@@ -381,6 +381,7 @@ async def upload_files(request: Request):
             background_image_path = None
             sat_bounds = None
 
+            raster_background = None
             for parent_output in parent_outputs:
                 if parent_output.get("boundaryShpPath") and base_geojson_path is None:
                     base_geojson_path = _within(parent_output["boundaryShpPath"], "files")
@@ -390,14 +391,23 @@ async def upload_files(request: Request):
                 if is_satellite and background_image_path is None:
                     background_image_path = _url_to_output_path(image_url)
                     sat_bounds = parent_output.get("satelliteBounds")
+                # Any analysis result (flood classes, slope, NDVI…) can be the background too: its
+                # preview is a Web Mercator image with exact bounds, just like a satellite photo.
+                elif parent_output.get("rasterBounds") and raster_background is None:
+                    raster_background = parent_output
 
                 layer_path = _within(parent_output.get("layerGeojsonPath"), "files")
                 if layer_path:
                     overlay_data.append({"path": layer_path,
                                          "layer_type": parent_output.get("layerType", "default")})
 
+            if background_image_path is None and raster_background is not None:
+                background_image_path = _url_to_output_path(raster_background.get("outputImageUrl"))
+                sat_bounds = raster_background["rasterBounds"]
+                if raster_background.get("legend"):
+                    spatial_outputs["legend"] = raster_background["legend"]   # keep its colour key
             if not base_geojson_path:
-                raise NodeError("Composite needs a Boundary node as input.")
+                raise NodeError("Combine Layers needs an Outline connected.")
             output_filename = await run_in_threadpool(
                 composite_geodata, base_geojson_path, overlay_data, alpha,
                 background_image_path, sat_bounds, tag)

@@ -24,6 +24,8 @@ PADDING = 0.03
 BACKGROUND = np.array([11, 15, 26], dtype=np.float32) / 255.0
 INSIDE_FILL = np.array([26, 37, 71], dtype=np.float32) / 255.0
 BOUNDARY_COLOR = np.array([0.67, 0.23, 1.0], dtype=np.float32)
+CASING_COLOR = np.array([0.08, 0.08, 0.1], dtype=np.float32)
+PAGE = np.array([244, 244, 245], dtype=np.float32) / 255.0      # surroundings of clipped backgrounds
 OUTSIDE_DIM = 0.4
 
 _EXTENT = getattr(Image, "Transform", Image).EXTENT
@@ -63,10 +65,12 @@ def _load_background(path, sat_bounds, extent, size):
     minx, miny, maxx, maxy = extent
     width, height = size
     img = Image.open(path)
-    if img.mode in ("RGBA", "LA", "P"):
-        # Clipped imagery: flatten transparent areas onto the background colour.
+    clipped = img.mode in ("RGBA", "LA", "P")
+    page = tuple(int(c * 255) for c in (PAGE if clipped else BACKGROUND))
+    if clipped:
+        # Clipped imagery / analysis results: transparent surroundings become a light page colour.
         rgba = img.convert("RGBA")
-        flat = Image.new("RGB", rgba.size, tuple(int(c * 255) for c in BACKGROUND))
+        flat = Image.new("RGB", rgba.size, page)
         flat.paste(rgba, mask=rgba.getchannel("A"))
         img = flat
     else:
@@ -92,9 +96,8 @@ def _load_background(path, sat_bounds, extent, size):
         img = img.reduce(factor)
         px0, px1, py0, py1 = px0 / factor, px1 / factor, py0 / factor, py1 / factor
 
-    fill = tuple(int(c * 255) for c in BACKGROUND)
-    out = img.transform((width, height), _EXTENT, (px0, py0, px1, py1), resample=_BICUBIC, fillcolor=fill)
-    return np.asarray(out, dtype=np.float32) / 255.0
+    out = img.transform((width, height), _EXTENT, (px0, py0, px1, py1), resample=_BICUBIC, fillcolor=page)
+    return np.asarray(out, dtype=np.float32) / 255.0, clipped
 
 
 def composite_geodata(base_geojson_path, overlay_data, alpha=0.6,
@@ -122,17 +125,20 @@ def composite_geodata(base_geojson_path, overlay_data, alpha=0.6,
     transform = from_bounds(west=minx, south=miny, east=maxx, north=maxy, width=width, height=height)
 
     has_background = bool(background_image_path and os.path.exists(background_image_path))
+    clipped_background = False
     if has_background:
-        composite = _load_background(background_image_path, sat_bounds, (minx, miny, maxx, maxy), (width, height))
+        composite, clipped_background = _load_background(background_image_path, sat_bounds,
+                                                         (minx, miny, maxx, maxy), (width, height))
     else:
         composite = np.empty((height, width, 3), dtype=np.float32)
         composite[:] = BACKGROUND
 
     inside = _burn(base_gdf.geometry, shape, transform)
-    if has_background:
+    if has_background and not clipped_background:
         composite[~inside] *= OUTSIDE_DIM          # spotlight the area of interest
-    else:
+    elif not has_background:
         composite[inside] = INSIDE_FILL
+    casing_width = max(1, round(max(width, height) / 1400))
 
     for overlay in overlay_data:
         path = overlay.get("path")
@@ -144,9 +150,13 @@ def composite_geodata(base_geojson_path, overlay_data, alpha=0.6,
             gdf = gdf.cx[minx:maxx, miny:maxy]
             if gdf.empty:
                 continue
-            # all_touched keeps thin lines continuous at country scale.
-            burned = _burn(gdf.geometry, shape, transform, all_touched=layer_type != "buildings")
+            # all_touched keeps thin lines continuous at country scale; overlays stay inside the outline.
+            burned = _burn(gdf.geometry, shape, transform, all_touched=layer_type != "buildings") & inside
             color = OVERLAY_COLORS.get(layer_type, OVERLAY_COLORS["default"])
+            if layer_type != "buildings":
+                # Dark casing around lines (as on road maps) keeps them readable on light and dark backgrounds.
+                casing = binary_dilation(burned, iterations=casing_width) & ~burned & inside
+                composite[casing] = composite[casing] * (1 - 0.6 * alpha) + CASING_COLOR * 0.6 * alpha
             composite[burned] = composite[burned] * (1 - alpha) + color * alpha
         except Exception as e:
             print(f"Error burning overlay {path}: {e}")
