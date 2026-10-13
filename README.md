@@ -112,6 +112,19 @@ Terrain analyses use the 30 m Copernicus DEM, so features narrower than about 30
 are not resolved. Flood results are susceptibility screening for planning and prioritisation, not flood zone
 designations.
 
+## Project status
+
+GeoFlow is an active work in progress. The aim is to show what spatial analysis can look like for
+people who need simple answers, like where floods are likely or how steep the ground is, but don't
+have the time to learn a full GIS package such as ArcGIS. The analyses are deliberately kept simple
+and are meant for exploration and screening, not professional or regulatory decisions.
+
+Planned next steps:
+- Validate flood susceptibility against official flood maps (e.g. Environment Agency Flood Zones)
+- Support higher-resolution elevation data where available (e.g. UK LiDAR)
+- Deploy a public demo
+
+
 ## License
 
 [MIT](LICENSE)
