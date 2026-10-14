@@ -3,8 +3,10 @@ import json
 import re
 import time
 import shutil
+import asyncio
 import mimetypes
 import traceback
+from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote
 
 import matplotlib
@@ -28,7 +30,24 @@ from geocoder import search_places
 from exporter import export_jpeg
 import spatial
 
-BASE_URL = os.environ.get("GEOFLOW_BASE_URL", "http://localhost:8000")
+def _env_number(name, default=0):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# Public address of this server. Hugging Face Spaces provides SPACE_HOST (e.g. user-geoflow.hf.space).
+BASE_URL = (os.environ.get("GEOFLOW_BASE_URL")
+            or (f"https://{os.environ['SPACE_HOST']}" if os.environ.get("SPACE_HOST") else "http://localhost:8000"))
+# Built frontend (geoflow-project/dist) to serve from this server, for a single-URL deployment.
+STATIC_DIR = os.environ.get("GEOFLOW_STATIC_DIR")
+# Limits for a public deployment; 0 = off (the default when running locally).
+MAX_UPLOAD_MB = _env_number("GEOFLOW_MAX_UPLOAD_MB")
+MAX_JOBS = int(_env_number("GEOFLOW_MAX_JOBS"))
+RETENTION_HOURS = _env_number("GEOFLOW_RETENTION_HOURS")
+DATA_FOLDERS = ("outputs", "files", "uploads", "cache")
+
 PARAM_KEYS = {"nodeType", "nodeId", "locations", "parentOutputs", "satelliteZoom", "layerType",
               "boundarySource", "boundaryAdminLevel", "alpha", "dpi", "clipToBoundary"} | spatial.PARAM_KEYS
 RASTER_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -38,7 +57,41 @@ for folder in ("outputs", "files", "uploads"):
     os.makedirs(folder, exist_ok=True)
 mimetypes.add_type("application/geo+json", ".geojson")
 
-app = FastAPI(title="GeoFlow")
+def _delete_old_files(max_age_s):
+    """Removes results, uploads and caches older than max_age_s (public deployments only)."""
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for folder in DATA_FOLDERS:
+        for root, _, names in os.walk(folder):
+            for name in names:
+                path = os.path.join(root, name)
+                try:
+                    if os.path.getmtime(path) < cutoff:
+                        os.remove(path)
+                        removed += 1
+                except OSError:
+                    pass
+    if removed:
+        print(f"Removed {removed} file(s) older than {max_age_s / 3600:g} h")
+
+
+async def _sweep_old_files():
+    while True:
+        await run_in_threadpool(_delete_old_files, RETENTION_HOURS * 3600)
+        await asyncio.sleep(1800)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    sweeper = asyncio.create_task(_sweep_old_files()) if RETENTION_HOURS > 0 else None
+    yield
+    if sweeper:
+        sweeper.cancel()
+
+
+app = FastAPI(title="GeoFlow", lifespan=lifespan)
+# Heavy node runs allowed at the same time (others wait their turn); None = no limit.
+JOB_SLOTS = asyncio.Semaphore(MAX_JOBS) if MAX_JOBS > 0 else None
 
 app.add_middleware(
     CORSMiddleware,
@@ -207,6 +260,21 @@ def boundary_tile(z: int, x: int, y: int, boundary: str):
 
 @app.post("/upload")
 async def upload_files(request: Request):
+    if MAX_UPLOAD_MB > 0:
+        try:
+            size = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            size = 0
+        if size > MAX_UPLOAD_MB * 1024 * 1024:
+            return JSONResponse(status_code=413, content={
+                "status": "error", "detail": f"Files are limited to {MAX_UPLOAD_MB:g} MB on this demo server."})
+    if JOB_SLOTS is None:
+        return await _run_node(request)
+    async with JOB_SLOTS:
+        return await _run_node(request)
+
+
+async def _run_node(request: Request):
     started = time.perf_counter()
     form = await request.form()
 
@@ -466,3 +534,9 @@ async def upload_files(request: Request):
         # Spatial analysis nodes: rasterPath/rasterUrl, vectorPath/vectorGeoJsonUrl, legend, stats, details…
         **spatial_outputs,
     }
+
+
+# Single-URL deployment: serve the built frontend for every path the API doesn't handle.
+# Mounted last, so the API routes above always take priority.
+if STATIC_DIR and os.path.isdir(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="app")

@@ -23,6 +23,8 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_origin
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .common import InputError
 from .raster_io import Raster
@@ -84,6 +86,13 @@ LANDSAT_BAD_BITS = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 4)
 _tokens = {}
 _token_lock = threading.Lock()
 
+# Dropped connections and temporary server errors are retried with back-off (search requests are
+# read-only POSTs, so retrying them is safe).
+_session = requests.Session()
+_session.headers.update(HEADERS)
+_session.mount("https://", HTTPAdapter(max_retries=Retry(
+    total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=None)))
+
 
 def _token(account, container):
     key = (account, container)
@@ -91,7 +100,7 @@ def _token(account, container):
         cached = _tokens.get(key)
         if cached and cached[1] > time.time():
             return cached[0]
-        response = requests.get(TOKEN_URL.format(account=account, container=container), headers=HEADERS, timeout=20)
+        response = _session.get(TOKEN_URL.format(account=account, container=container), timeout=20)
         response.raise_for_status()
         token = response.json()["token"]
         _tokens[key] = (token, time.time() + TOKEN_LIFETIME)
@@ -117,7 +126,7 @@ def _search_pages(body):
     """All matching items, following the API's "next page" links (up to MAX_SEARCH_ITEMS)."""
     items, url, request = [], SEARCH_URL, body
     while url and len(items) < MAX_SEARCH_ITEMS:
-        response = requests.post(url, json=request, headers=HEADERS, timeout=60)
+        response = _session.post(url, json=request, timeout=60)
         response.raise_for_status()
         data = response.json()
         items += data.get("features", [])

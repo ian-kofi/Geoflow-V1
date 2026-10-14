@@ -1,4 +1,6 @@
-export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+// 'same-origin' when the backend also serves this app (single-URL deployment, e.g. Hugging Face Spaces).
+const configuredApi = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+export const API_URL = configuredApi === 'same-origin' ? window.location.origin : configuredApi;
 
 export const STORAGE_KEY = 'geoflow:workflow:v1';
 export const THEME_KEY = 'geoflow:theme';

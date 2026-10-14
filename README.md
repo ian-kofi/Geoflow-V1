@@ -121,6 +121,20 @@ npm run dev                                                       # http://local
 On Windows you can instead double-click `start-geoflow.cmd` once both are installed.
 See [`geoflow-project/README.md`](geoflow-project/README.md) for the full node reference.
 
+### Run it with Docker
+
+The [`Dockerfile`](Dockerfile) builds one container in which the backend also serves the app:
+
+```bash
+docker build -t geoflow .
+docker run -p 7860:7860 -e GEOFLOW_BASE_URL=http://localhost:7860 geoflow   # http://localhost:7860
+```
+
+The container turns on limits suited to a public server: uploads up to 50 MB, at most 3 heavy steps at
+once, and results deleted after 6 hours. Change them with `GEOFLOW_MAX_UPLOAD_MB`, `GEOFLOW_MAX_JOBS` and
+`GEOFLOW_RETENTION_HOURS`, or set them to `0` to turn them off. [`deploy/huggingface/`](deploy/huggingface/)
+holds the files for a Hugging Face Space that builds the demo from this repository.
+
 ## Data sources and limitations
 
 geoBoundaries, GADM, OpenStreetMap (Nominatim, Overpass), Esri World Imagery, Microsoft Planetary Computer

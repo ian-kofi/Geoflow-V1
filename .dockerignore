@@ -1,0 +1,11 @@
+**/.venv
+**/node_modules
+**/__pycache__
+geoflow-backend/files
+geoflow-backend/outputs
+geoflow-backend/uploads
+geoflow-backend/cache
+geoflow-project/dist
+docs
+.git
+Main.py
