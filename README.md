@@ -85,6 +85,11 @@ determination, which requires hydraulic modelling):
 In York the High class picks out the River Foss corridor, the Ouse washlands and the Derwent Ings, while the
 York moraine, the glacial ridge the city grew on, comes out Low.
 
+**Validation.** Against the Environment Agency's official Flood Zones, the workflow ranks flood-zone land with
+a ROC AUC of **0.92 in Sheffield** and **0.77 in York** (0.5 = chance). In Sheffield, three quarters of the
+High class lies in Flood Zones 2 or 3, which cover just 5.5% of the city. Adding mapped rivers raised York from
+0.62 to 0.77. See [VALIDATION.md](VALIDATION.md) for the method, maps and limitations.
+
 The same building blocks support other analyses, for example slope-stability classes, vegetation health from a
 cloud-free Sentinel-2 median composite, or district-level summaries with zonal statistics.
 
@@ -134,7 +139,8 @@ have the time to learn a full GIS package such as ArcGIS. The analyses are delib
 and are meant for exploration and screening, not professional or regulatory decisions.
 
 Planned next steps:
-- Validate flood susceptibility against official flood maps (e.g. Environment Agency Flood Zones)
+- ~~Validate flood susceptibility against official flood maps~~ Done for York and Sheffield
+  ([VALIDATION.md](VALIDATION.md)). Next: more sites, and test giving HAND more weight
 - Support higher-resolution elevation data where available (e.g. UK LiDAR)
 - Deploy a public demo
 
