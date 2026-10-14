@@ -25,6 +25,10 @@ ENV PYTHONUNBUFFERED=1 \
     MPLCONFIGDIR=/tmp/matplotlib \
     PORT=7860
 
+# Rasterio needs the libexpat system library, which the slim Python image leaves out
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Run as an ordinary user rather than root
 RUN useradd --create-home --uid 1000 geoflow
 WORKDIR /app/backend
