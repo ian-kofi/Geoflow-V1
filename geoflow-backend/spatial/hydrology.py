@@ -8,6 +8,7 @@ Nobre et al. 2011). Pure numpy/scipy, no hydrology library needed.
 """
 import heapq
 import math
+import os
 
 import numpy as np
 from scipy import ndimage
@@ -16,7 +17,7 @@ from .common import InputError
 
 # D8 neighbour offsets (row, col)
 OFFSETS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-MAX_CELLS = 12_000_000
+MAX_CELLS = 3_000_000 if os.environ.get("GEOFLOW_LOW_MEMORY") == "1" else 12_000_000
 
 
 def fill_depressions(dem):

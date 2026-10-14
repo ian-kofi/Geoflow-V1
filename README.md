@@ -132,8 +132,11 @@ docker run -p 7860:7860 -e GEOFLOW_BASE_URL=http://localhost:7860 geoflow   # ht
 
 The container turns on limits suited to a public server: uploads up to 50 MB, at most 3 heavy steps at
 once, and results deleted after 6 hours. Change them with `GEOFLOW_MAX_UPLOAD_MB`, `GEOFLOW_MAX_JOBS` and
-`GEOFLOW_RETENTION_HOURS`, or set them to `0` to turn them off. [`deploy/huggingface/`](deploy/huggingface/)
-holds the files for a Hugging Face Space that builds the demo from this repository.
+`GEOFLOW_RETENTION_HOURS`, or set them to `0` to turn them off. `GEOFLOW_LOW_MEMORY=1` processes large areas at
+lower detail so maps fit in about 400 MB of memory.
+
+The public demo runs on Render's free plan, configured by [`render.yaml`](render.yaml): on render.com choose
+**New → Blueprint** and pick this repository.
 
 ## Data sources and limitations
 

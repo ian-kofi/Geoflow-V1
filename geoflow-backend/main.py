@@ -37,9 +37,9 @@ def _env_number(name, default=0):
         return default
 
 
-# Public address of this server. Hugging Face Spaces provides SPACE_HOST (e.g. user-geoflow.hf.space).
-BASE_URL = (os.environ.get("GEOFLOW_BASE_URL")
-            or (f"https://{os.environ['SPACE_HOST']}" if os.environ.get("SPACE_HOST") else "http://localhost:8000"))
+# Public address of this server. Render provides RENDER_EXTERNAL_URL (e.g. https://geoflow.onrender.com).
+BASE_URL = (os.environ.get("GEOFLOW_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+            or "http://localhost:8000").rstrip("/")
 # Built frontend (geoflow-project/dist) to serve from this server, for a single-URL deployment.
 STATIC_DIR = os.environ.get("GEOFLOW_STATIC_DIR")
 # Limits for a public deployment; 0 = off (the default when running locally).

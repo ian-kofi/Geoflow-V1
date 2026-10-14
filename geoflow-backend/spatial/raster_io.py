@@ -20,7 +20,8 @@ from .common import InputError
 RASTER_DIR = os.path.join("files", "rasters")
 STYLE_DIR = os.path.join("files", "styles")
 OUTPUT_DIR = "outputs"
-MAX_PIXELS = 40_000_000        # per band; beyond this, ask the user to clip first
+LOW_MEMORY = os.environ.get("GEOFLOW_LOW_MEMORY") == "1"   # small servers (e.g. 512 MB free hosting)
+MAX_PIXELS = 6_000_000 if LOW_MEMORY else 40_000_000   # per band; beyond this, ask the user to clip first
 PREVIEW_MAX = 2048             # longest side of map/node previews
 EARTH_RADIUS = 6378137.0
 MAX_LAT = 85.05112878

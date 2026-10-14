@@ -29,6 +29,17 @@ import QuickMapDialog from './components/QuickMapDialog.jsx';
 import Icon from './components/Icon.jsx';
 
 const nodeTypes = Object.fromEntries(Object.keys(NODE_TYPES).map((type) => [type, GeoNode]));
+// Public demo builds (VITE_DEMO_NOTICE=1) explain that the free server is slower and less detailed.
+const DEMO_NOTICE = import.meta.env.VITE_DEMO_NOTICE === '1';
+const DEMO_NOTICE_KEY = 'geoflow:demo-notice-dismissed';
+
+function demoNoticeDismissed() {
+  try {
+    return localStorage.getItem(DEMO_NOTICE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 const TRANSIENT_STATUS = new Set(['queued', 'running']);
 
 /** Brings saved/imported nodes into a consistent state (files and in-flight runs don't survive a reload). */
@@ -282,6 +293,16 @@ function Editor() {
     [replaceWorkflow, log],
   );
 
+  const [demoNoticeOpen, setDemoNoticeOpen] = useState(() => DEMO_NOTICE && !demoNoticeDismissed());
+  const dismissDemoNotice = useCallback(() => {
+    setDemoNoticeOpen(false);
+    try {
+      localStorage.setItem(DEMO_NOTICE_KEY, '1');
+    } catch {
+      /* private mode: it just shows again next visit */
+    }
+  }, []);
+
   const onClear = useCallback(() => {
     if (nodes.length && window.confirm('Remove all nodes from the canvas?')) replaceWorkflow({ nodes: [], edges: [] });
   }, [nodes.length, replaceWorkflow]);
@@ -356,6 +377,21 @@ function Editor() {
                     </button>
                   ))}
                 </div>
+              </Panel>
+            )}
+            {demoNoticeOpen && !mapExpanded && (
+              <Panel position="top-center" className="gf-demo-notice" role="note">
+                <span>
+                  Free demo server: maps take a minute or two, large areas use less detail, and results are cleared
+                  after a few hours. For full speed,{' '}
+                  <a href="https://github.com/ian-kofi/Geoflow-V1#run-it-locally" target="_blank" rel="noreferrer">
+                    run GeoFlow locally
+                  </a>
+                  .
+                </span>
+                <button type="button" className="gf-icon-btn" onClick={dismissDemoNotice} aria-label="Dismiss">
+                  <Icon name="x" size={14} />
+                </button>
               </Panel>
             )}
           </ReactFlow>

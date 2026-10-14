@@ -6,6 +6,7 @@ the local UTM zone, cloud-masked, and mosaicked least-cloudy-first so gaps in
 one scene are filled from the next.
 """
 import math
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,12 +34,14 @@ SEARCH_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
 # Tokens are scoped to a blob storage account + container (not to a collection).
 TOKEN_URL = "https://planetarycomputer.microsoft.com/api/sas/v1/token/{account}/{container}"
 HEADERS = {"User-Agent": "GeoFlowApp/1.0"}
-MAX_SIDE = 3000           # px; coarser resolution is used for bigger areas
-MAX_OPTICAL_SCENES = 16   # median mode (small areas); the blue stack costs 2 bytes per pixel per scene
+LOW_MEMORY = os.environ.get("GEOFLOW_LOW_MEMORY") == "1"   # small servers (e.g. 512 MB free hosting)
+MAX_SIDE = 1000 if LOW_MEMORY else 3000           # px; coarser resolution is used for bigger areas
+# Median mode (small areas); the blue stack costs 2 bytes per pixel per scene
+MAX_OPTICAL_SCENES = 4 if LOW_MEMORY else 16
 MAX_SEARCH_ITEMS = 1000
 COVERAGE_MODE_TILES = 4   # areas spanning more satellite tiles than this use the coverage-first mosaic
 COVERAGE_ROUNDS = 3       # …taking up to this many photos per tile to fill cloud gaps
-SCENE_WORKERS = 8         # photos read at the same time in coverage mode
+SCENE_WORKERS = 2 if LOW_MEMORY else 8   # photos read at the same time in coverage mode
 GAP_TOLERANCE = 0.01      # fill gaps automatically while more than 1% of the area is empty
 GAP_FILL_CLOUD = 70       # cloud limit for gap-filling photos (their clouds are masked per pixel)
 GAP_FILL_DAYS = 182       # how far back gap-filling may look
