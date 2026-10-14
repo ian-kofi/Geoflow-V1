@@ -1,5 +1,8 @@
 # GeoFlow
 
+**[Try the live demo](https://geoflow-2tsv.onrender.com)** (free server: the first visit can take about a
+minute to wake it up, and maps take a minute or two)
+
 **A node based app for making maps and doing spatial analysis.** You drag nodes onto a canvas and connect
 them to fetch data, analyse it and produce a finished map, without needing GIS software. If you're new to
 this, the **Make a map** assistant builds a ready made workflow for you, which you can then open up, change
@@ -167,7 +170,7 @@ Planned next steps:
 - ~~Validate flood susceptibility against official flood maps~~ Done for York and Sheffield
   ([VALIDATION.md](VALIDATION.md)). Next: more sites, and test giving height above river more weight
 - Support more detailed elevation data where it's available, such as UK LiDAR
-- Deploy a public demo
+- ~~Deploy a public demo~~ Done: [geoflow-2tsv.onrender.com](https://geoflow-2tsv.onrender.com)
 
 ## License
 
