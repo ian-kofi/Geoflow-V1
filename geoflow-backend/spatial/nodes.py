@@ -139,12 +139,32 @@ def hillshade(ctx: Context):
     return raster_result(dem.with_data(values[None], ["hillshade"]), "hillshade", ctx.tag, preview)
 
 
+def _upstream_cmap(parents, default):
+    """The colour scale of the most recently connected result that has one, or `default`.
+
+    This is how a Colour Map placed before Contour Lines (or before Select by Location) carries
+    its colours through to the lines. If several inputs have a colour scale, the newest
+    connection wins, so adding a Colour Map changes the colours even if the elevation data is
+    still connected directly as well.
+    """
+    for parent in reversed(parents):
+        legend = parent.get("legend") or {}
+        if legend.get("type") == "continuous" and legend.get("cmap") in colormaps:
+            return legend["cmap"]
+    return default
+
+
 def contours(ctx: Context):
-    """Contour Lines: lines of equal height, every so many metres."""
+    """Contour Lines: lines of equal height, every so many metres.
+
+    The lines are coloured with the same colour scale as the connected ground height, so
+    putting a Colour Map before this node changes their colours too.
+    """
     dem = _dem(ctx)
     interval = ctx.number("interval", 50, 0.01, 1e6)
     lines = terrain.contours(dem, interval)
-    return vector_result(lines, "contours", ctx.tag, column="elevation", cmap="terrain", legend_label="Height (m)",
+    cmap = _upstream_cmap(ctx.inputs(), "terrain")
+    return vector_result(lines, "contours", ctx.tag, column="elevation", cmap=cmap, legend_label="Height (m)",
                          details={"Interval": f"{interval:g} m", "Levels": str(lines['elevation'].nunique())})
 
 
@@ -528,7 +548,8 @@ def spatial_filter(ctx: Context):
     # Contour lines keep their height colours and legend after being cut to an outline.
     heights = "elevation" in result.columns
     return vector_result(result, "filter", ctx.tag, outline=mask,
-                         column="elevation" if heights else None, cmap="terrain",
+                         column="elevation" if heights else None,
+                         cmap=_upstream_cmap(ctx.inputs("data"), "terrain"),
                          legend_label="Height (m)" if heights else None,
                          details={"Mode": vector_ops.FILTER_MODES[mode], "Input features": f"{len(data):,}"})
 

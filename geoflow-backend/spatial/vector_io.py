@@ -89,10 +89,14 @@ def render_vector(gdf, name, tag, column=None, cmap="viridis", outline=None):
 
 
 def column_legend(gdf, column, cmap, label):
-    """A colour scale legend for features coloured by a number column."""
+    """A colour scale legend for features coloured by a number column.
+
+    It includes the colour scale's name, so later nodes can keep using the same colours.
+    """
     values = gdf[column].astype(float)
     return {"type": "continuous", "label": label, "unit": "", "min": float(np.nanmin(values)),
-            "max": float(np.nanmax(values)), "colors": [to_hex(colormaps[cmap](i / 7)) for i in range(8)]}
+            "max": float(np.nanmax(values)), "colors": [to_hex(colormaps[cmap](i / 7)) for i in range(8)],
+            "cmap": cmap}
 
 
 def vector_result(gdf, name, tag, column=None, cmap="viridis", legend_label=None, details=None, outline=None):
