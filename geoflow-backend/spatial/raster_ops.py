@@ -1,4 +1,5 @@
-"""Raster algorithms: map algebra, spectral indices, reclassification, clipping, zonal statistics."""
+"""Raster tools: the raster calculator, spectral indices (like NDVI), reclassify, cutting to an
+outline, and zonal statistics (a summary of the values inside each area)."""
 import ast
 import operator
 import os
@@ -14,8 +15,9 @@ from .raster_io import Raster, align_to, category_colors
 TABLE_DIR = os.path.join("files", "tables")
 MAX_ZONES = 5000
 
-# ---- Raster calculator (map algebra) ---------------------------------------
+# Raster calculator
 
+# The only operators and functions an expression may use
 _BIN_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
             ast.Pow: operator.pow, ast.Mod: operator.mod, ast.FloorDiv: operator.floordiv}
 _CMP_OPS = {ast.Gt: operator.gt, ast.GtE: operator.ge, ast.Lt: operator.lt, ast.LtE: operator.le,
@@ -26,11 +28,11 @@ _FUNCS = {"sqrt": np.sqrt, "abs": np.abs, "log": np.log, "log10": np.log10, "exp
 
 
 def evaluate(expression, variables):
-    """Evaluates an arithmetic expression over arrays.
+    """Works out an expression like "(A - B) / (A + B)" on whole grids at once.
 
-    Parsed with `ast` and walked node by node, so only numbers, variables,
-    arithmetic, comparisons and the whitelisted functions are possible —
-    never arbitrary Python.
+    The expression is never run as Python. It's parsed into a tree and each part is checked
+    and worked out by hand, so only numbers, the input names, arithmetic, comparisons and the
+    functions listed in _FUNCS are allowed. That keeps people from running code on the server.
     """
     try:
         tree = ast.parse(expression, mode="eval")
@@ -74,9 +76,10 @@ def evaluate(expression, variables):
 
 
 def raster_calculator(inputs, expression):
-    """`inputs` maps handle letters (A–D) to rasters; all are aligned to the first one.
+    """Runs the Raster Calculator. `inputs` maps the input letters (A, B, C, D) to rasters.
 
-    Variables: A (band 1), A1…An (band n), A.red / A.nir (named bands).
+    Every input is moved onto the grid of the first one. In the expression, A means the first
+    band of input A, A2 its second band, and A.nir its band named "nir".
     """
     if not inputs:
         raise InputError("Connect at least one raster to input A.")
@@ -95,26 +98,29 @@ def raster_calculator(inputs, expression):
     return ref.with_data(result[None], ["result"])
 
 
-# ---- Spectral indices -------------------------------------------------------
+# Spectral indices
 
 def _nd(a, b):
+    """A normalised difference, (a - b) / (a + b). Most indices are one of these."""
     return (a - b) / (a + b)
 
 
+# Each index: the bands it needs, its formula, a colour scale, the usual value range for
+# colouring, and what it shows.
 SPECTRAL_INDICES = {
     "ndvi": {"label": "NDVI", "bands": ("nir", "red"), "fn": lambda b: _nd(b["nir"], b["red"]),
              "cmap": "RdYlGn", "range": (-0.2, 0.9), "about": "vegetation"},
     "ndwi": {"label": "NDWI", "bands": ("green", "nir"), "fn": lambda b: _nd(b["green"], b["nir"]),
              "cmap": "RdBu", "range": (-0.6, 0.6), "about": "open water"},
     "mndwi": {"label": "MNDWI", "bands": ("green", "swir16"), "fn": lambda b: _nd(b["green"], b["swir16"]),
-              "cmap": "RdBu", "range": (-0.6, 0.6), "about": "water (urban-robust)"},
+              "cmap": "RdBu", "range": (-0.6, 0.6), "about": "water, works better in towns"},
     "ndbi": {"label": "NDBI", "bands": ("swir16", "nir"), "fn": lambda b: _nd(b["swir16"], b["nir"]),
              "cmap": "RdBu_r", "range": (-0.5, 0.5), "about": "built-up area"},
     "nbr": {"label": "NBR", "bands": ("nir", "swir22"), "fn": lambda b: _nd(b["nir"], b["swir22"]),
             "cmap": "RdYlGn", "range": (-0.5, 0.8), "about": "burn severity"},
     "savi": {"label": "SAVI", "bands": ("nir", "red"),
              "fn": lambda b: 1.5 * (b["nir"] - b["red"]) / (b["nir"] + b["red"] + 0.5),
-             "cmap": "RdYlGn", "range": (-0.2, 0.8), "about": "vegetation, soil-adjusted"},
+             "cmap": "RdYlGn", "range": (-0.2, 0.8), "about": "vegetation, corrected for bare soil"},
     "evi": {"label": "EVI", "bands": ("nir", "red", "blue"),
             "fn": lambda b: 2.5 * (b["nir"] - b["red"]) / (b["nir"] + 6 * b["red"] - 7.5 * b["blue"] + 1),
             "cmap": "RdYlGn", "range": (-0.2, 0.8), "about": "vegetation, enhanced"},
@@ -122,14 +128,16 @@ SPECTRAL_INDICES = {
 
 
 def spectral_index(raster, key):
+    """Works out one index (a key of SPECTRAL_INDICES) from a raster with named bands."""
     spec = SPECTRAL_INDICES[key]
     bands = {}
     for name in spec["bands"]:
         band = raster.band(name)
         if band is None:
             raise InputError(f"{spec['label']} needs a raster with bands named {', '.join(spec['bands'])} "
-                             f"(this one has: {', '.join(map(str, raster.names))}). Use a Sentinel-2/Landsat "
-                             "STAC Search, or the Raster Calculator with band numbers, e.g. (A4 - A3) / (A4 + A3).")
+                             f"(this one has: {', '.join(map(str, raster.names))}). Use Sentinel-2 or Landsat "
+                             "from Satellite and Elevation Data, or the Raster Calculator with band numbers, "
+                             "for example (A4 - A3) / (A4 + A3).")
         bands[name] = band
     with np.errstate(all="ignore"):
         result = spec["fn"](bands).astype(np.float32)
@@ -137,14 +145,23 @@ def spectral_index(raster, key):
     return raster.with_data(result[None], [key])
 
 
-# ---- Reclassify -------------------------------------------------------------
+# Reclassify
 
 def _format(v):
+    """A break value written neatly, with up to 4 significant figures."""
     return f"{v:,.4g}"
 
 
 def reclassify(raster, method, breaks_text, class_count, labels_text, unit=""):
-    """Continuous values → classes 1..k. Returns (raster, categories for the legend)."""
+    """Groups values into classes numbered 1, 2, 3 and so on.
+
+    method "manual" uses the break values typed in (for example "15, 30" gives three classes:
+    below 15, 15 to 30, and 30 or more). "equal" splits the range into equal steps, and
+    "quantile" so each class has about the same number of cells.
+
+    Returns the class raster and a list describing each class for the legend, including the
+    share of the area it covers.
+    """
     arr = raster.data[0]
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
@@ -153,9 +170,9 @@ def reclassify(raster, method, breaks_text, class_count, labels_text, unit=""):
         try:
             breaks = sorted(float(v) for v in breaks_text.replace(";", ",").split(",") if v.strip())
         except ValueError:
-            raise InputError("Breaks must be numbers separated by commas, e.g. 15, 30")
+            raise InputError("Breaks must be numbers separated by commas, for example 15, 30")
         if not breaks:
-            raise InputError("Enter at least one break value, e.g. 15, 30")
+            raise InputError("Enter at least one break value, for example 15, 30")
     else:
         k = int(class_count)
         if method == "quantile":
@@ -175,16 +192,20 @@ def reclassify(raster, method, breaks_text, class_count, labels_text, unit=""):
         elif i == count - 1:
             rng = f"≥ {_format(breaks[-1])}{unit}"
         else:
-            rng = f"{_format(breaks[i - 1])} – {_format(breaks[i])}{unit}"
+            rng = f"{_format(breaks[i - 1])} to {_format(breaks[i])}{unit}"
         name = labels[i] if i < len(labels) and labels[i] else f"Class {i + 1}"
         share = float(np.mean(classes[np.isfinite(classes)] == i + 1)) * 100
         categories.append({"value": i + 1, "label": f"{name} ({rng})", "color": colors[i], "percent": round(share, 1)})
     return raster.with_data(classes[None], ["class"]), categories
 
 
-# ---- Clip raster ------------------------------------------------------------
+# Cut to outline
 
 def clip_raster(raster, mask_gdf, crop=True):
+    """Blanks out every cell outside the shapes. With crop, the empty border is trimmed off too.
+
+    Cells the outline only touches still count as inside, so thin areas aren't lost.
+    """
     geoms = [g for g in mask_gdf.to_crs(raster.crs).geometry if g is not None and not g.is_empty]
     if not geoms:
         raise InputError("The mask has no geometry.")
@@ -202,15 +223,21 @@ def clip_raster(raster, mask_gdf, crop=True):
     return Raster(sliced, raster.crs, window_transform(window, raster.transform), raster.names)
 
 
-# ---- Zonal statistics -------------------------------------------------------
+# Zonal statistics
 
 def zonal_statistics(raster, zones, band_index, tag):
-    """Per-polygon count/mean/min/max/std/sum of one band. Returns (zones gdf, csv path)."""
+    """For each area, the count, mean, lowest, highest, spread and sum of one band's values.
+
+    Each area only reads the small block of the raster under it, which keeps this quick even
+    with thousands of districts. Returns the areas with the numbers added as columns, and the
+    path of a CSV table with the same numbers.
+    """
     zones = zones[zones.geometry.geom_type.str.contains("Polygon")].copy()
     if zones.empty:
-        raise InputError("Zonal statistics needs polygon zones (e.g. a Boundary at ADM1/ADM2).")
+        raise InputError("Average per Area needs areas to work with, for example an Outline split into "
+                         "regions or districts.")
     if len(zones) > MAX_ZONES:
-        raise InputError(f"Too many zones ({len(zones):,}); the limit is {MAX_ZONES:,}.")
+        raise InputError(f"Too many areas ({len(zones):,}). The limit is {MAX_ZONES:,}.")
     if not 0 <= band_index < raster.data.shape[0]:
         raise InputError(f"The raster has {raster.data.shape[0]} band(s); band {band_index + 1} does not exist.")
     arr = raster.data[band_index]
@@ -227,7 +254,7 @@ def zonal_statistics(raster, zones, band_index, tag):
             sub_transform = window_transform(Window(c0, r0, c1 - c0, r1 - r0), raster.transform)
             inside = geometry_mask([geom], out_shape=(r1 - r0, c1 - c0), transform=sub_transform,
                                    invert=True, all_touched=False)
-            if not inside.any():   # zone smaller than a pixel: use any touched pixel
+            if not inside.any():   # an area smaller than a cell: use any cell it touches
                 inside = geometry_mask([geom], out_shape=(r1 - r0, c1 - c0), transform=sub_transform,
                                        invert=True, all_touched=True)
             block = arr[r0:r1, c0:c1][inside]

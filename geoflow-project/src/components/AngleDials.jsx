@@ -1,14 +1,21 @@
+/**
+ * The two dials on the Shaded Relief node: a compass for the sun's direction and a quarter
+ * circle for its height above the horizon. Drag on a dial, or use the arrow keys, to change it.
+ */
 import { useRef } from 'react';
 
+// The 16 compass points, one every 22.5°, starting from north and going clockwise
 const DIRECTIONS = [
   'north', 'north-northeast', 'northeast', 'east-northeast', 'east', 'east-southeast', 'southeast', 'south-southeast',
   'south', 'south-southwest', 'southwest', 'west-southwest', 'west', 'west-northwest', 'northwest', 'north-northwest',
 ];
 
+/** The compass point nearest to an angle, like 315 to "northwest". */
 export function compassDirection(degrees) {
   return DIRECTIONS[Math.round((((degrees % 360) + 360) % 360) / 22.5) % 16];
 }
 
+/** What a sun at this height does to the picture, shown under the height dial. */
 function altitudeEffect(altitude) {
   if (altitude < 25) return 'Low sun: long shadows, strong relief';
   if (altitude < 55) return 'Mid-height sun: balanced relief';
@@ -17,7 +24,7 @@ function altitudeEffect(altitude) {
 
 const rad = (deg) => (deg * Math.PI) / 180;
 
-/** Pointer position in SVG viewBox units. */
+/** Where the pointer is, in the dial drawing's own units rather than screen pixels. */
 function svgPoint(svg, event, viewWidth, viewHeight) {
   const rect = svg.getBoundingClientRect();
   return {
@@ -26,7 +33,10 @@ function svgPoint(svg, event, viewWidth, viewHeight) {
   };
 }
 
-/** Shared pointer + keyboard handling: drag anywhere on the dial to set the angle. */
+/**
+ * Mouse, touch and keyboard handling shared by both dials. Dragging anywhere on the dial sets
+ * the angle, rounded to `step`. Arrow keys move by one step and Page Up or Page Down by three.
+ */
 function useDial({ value, min, max, step, onChange, angleFromPoint, viewWidth, viewHeight, wrap }) {
   const svgRef = useRef(null);
   const snap = (v) => {
@@ -43,7 +53,7 @@ function useDial({ value, min, max, step, onChange, angleFromPoint, viewWidth, v
     svgRef,
     handlers: {
       onPointerDown: (e) => {
-        e.stopPropagation(); // don't start dragging the node
+        e.stopPropagation(); // stop the canvas from dragging the whole node instead
         e.currentTarget.setPointerCapture(e.pointerId);
         update(e);
       },
@@ -61,7 +71,7 @@ function useDial({ value, min, max, step, onChange, angleFromPoint, viewWidth, v
   };
 }
 
-/** Compass dial for the sun's azimuth (0° = north, clockwise). */
+/** The compass dial for the sun's direction, in degrees clockwise from north (0° is north). */
 export function CompassDial({ id, value = 315, min = 0, max = 360, step = 5, onChange }) {
   const size = 120;
   const c = size / 2;
@@ -123,7 +133,7 @@ export function CompassDial({ id, value = 315, min = 0, max = 360, step = 5, onC
             {letter}
           </text>
         ))}
-        {/* light falls from the sun across the terrain; the shadow points the other way */}
+        {/* light comes from the sun across the hill, and the shadow points the other way */}
         <line className="gf-dial__shadow" x1={c} y1={c} x2={shadow.x} y2={shadow.y} />
         <line className="gf-dial__ray" x1={sun.x} y1={sun.y} x2={c} y2={c} />
         <path className="gf-dial__hill" d={`M${c - 7} ${c + 4} L${c} ${c - 5} L${c + 7} ${c + 4} Z`} />
@@ -140,7 +150,7 @@ export function CompassDial({ id, value = 315, min = 0, max = 360, step = 5, onC
   );
 }
 
-/** Quarter-circle dial for the sun's height above the horizon (0° horizon → 90° overhead). */
+/** The quarter circle dial for the sun's height, from 0° (on the horizon) to 90° (straight overhead). */
 export function ElevationDial({ id, value = 45, min = 1, max = 90, step = 1, onChange }) {
   const width = 120;
   const height = 92;
@@ -160,7 +170,7 @@ export function ElevationDial({ id, value = 45, min = 1, max = 90, step = 1, onC
   const point = (deg, r = radius) => ({ x: origin.x + r * Math.cos(rad(deg)), y: origin.y - r * Math.sin(rad(deg)) });
   const sun = point(angle);
   const arcEnd = point(90);
-  // Filled wedge between the horizon and the sun shows the selected angle.
+  // A small filled wedge between the horizon and the sun shows the chosen angle.
   const wedgeR = 22;
   const wedgeEnd = point(angle, wedgeR);
 

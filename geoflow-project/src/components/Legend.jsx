@@ -1,11 +1,16 @@
+/** A number written neatly for people: 0.25, 12.5, 1,250, or 1.2e+6 for very big or small ones. */
 function formatValue(value) {
-  if (value == null || Number.isNaN(value)) return '–';
+  if (value == null || Number.isNaN(value)) return 'n/a';
   const abs = Math.abs(value);
   if (abs !== 0 && (abs < 0.01 || abs >= 100000)) return value.toExponential(1);
   return Number(value.toFixed(abs < 1 ? 2 : abs < 100 ? 1 : 0)).toLocaleString();
 }
 
-/** Colour key for a raster/vector result: gradient bar, class swatches or a true-colour note. */
+/**
+ * A result's legend: a colour bar with the lowest and highest values, a coloured square and
+ * label for each class, or just a title for satellite photos. `compact` is the smaller version
+ * shown on nodes.
+ */
 export default function Legend({ legend, compact = false }) {
   if (!legend) return null;
   const unit = legend.unit ? ` ${legend.unit}` : '';

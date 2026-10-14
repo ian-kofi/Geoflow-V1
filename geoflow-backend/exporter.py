@@ -1,4 +1,10 @@
-"""Finished-map JPEG export: title, the map picture, north arrow, scale bar and colour key."""
+"""The "Download JPEG map" button: turns a result into a finished map you can share or print.
+
+The page is laid out from top to bottom: the title (and subtitle, if any), the map picture with
+a north arrow and scale bar on it, the legend, and a small "Made with GeoFlow" line with the
+date. Everything is drawn with Pillow. The font is DejaVu Sans, which comes with matplotlib,
+so it looks the same on every computer.
+"""
 import io
 import math
 from datetime import date
@@ -9,24 +15,27 @@ from PIL import Image, ImageDraw, ImageFont
 PAGE = (255, 255, 255)
 TEXT = (30, 30, 30)
 MUTED = (110, 110, 110)
-MARGIN = 48
-MAX_MAP_WIDTH = 2000
-MIN_PAGE_WIDTH = 1000
+MARGIN = 48               # space around the edge of the page, in pixels
+MAX_MAP_WIDTH = 2000      # bigger pictures are scaled down to this
+MIN_PAGE_WIDTH = 1000     # small pictures sit on a page at least this wide, so the title fits
 
 
 def _font(size, bold=False):
+    """DejaVu Sans at the given size."""
     path = font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans", weight="bold" if bold else "normal"))
     return ImageFont.truetype(path, size)
 
 
 def _hex(color):
+    """'#1a73e8' to (26, 115, 232)."""
     color = color.lstrip("#")
     return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def _fmt(value):
+    """A number written neatly for the legend: 0.25, 12.5, 1,250 or 1.2e+06 for very big or small ones."""
     if value is None:
-        return "–"
+        return "n/a"
     magnitude = abs(value)
     if magnitude != 0 and (magnitude < 0.01 or magnitude >= 100000):
         return f"{value:.1e}"
@@ -34,7 +43,7 @@ def _fmt(value):
 
 
 def _nice_distance(max_km):
-    """Largest 1/2/5×10ⁿ distance that fits."""
+    """The biggest round distance (1, 2 or 5 followed by zeros, like 20 or 500) up to max_km."""
     exponent = math.floor(math.log10(max_km))
     for step in (5, 2, 1):
         if step * 10 ** exponent <= max_km:
@@ -43,11 +52,16 @@ def _nice_distance(max_km):
 
 
 def _text_width(draw, text, font):
+    """How wide a piece of text will be, in pixels."""
     left, _, right, _ = draw.textbbox((0, 0), text, font=font)
     return right - left
 
 
 def _legend_height(legend):
+    """How much room the legend needs, so the page can be made the right height before drawing.
+
+    Photos (type "rgb") have no legend. Classes need a row each, and a colour scale a fixed space.
+    """
     if not legend or legend.get("type") == "rgb":
         return 0
     if legend.get("type") == "categorical":
@@ -56,6 +70,12 @@ def _legend_height(legend):
 
 
 def _draw_legend(draw, legend, x, y, width):
+    """Draws the legend with its top left corner at (x, y).
+
+    For classes (like Low, Moderate, High) that's a coloured square and label for each, with
+    the share of the area. For a continuous value (like height) it's a colour bar with the
+    lowest and highest values under each end.
+    """
     title_font, font = _font(20, bold=True), _font(18)
     unit = f" {legend.get('unit')}" if legend.get("unit") else ""
     if legend.get("label"):
@@ -68,6 +88,7 @@ def _draw_legend(draw, legend, x, y, width):
             draw.text((x + 34, y), f"{cat['label']}{share}", font=font, fill=TEXT)
             y += 30
         return
+    # The colour bar: one line of pixels at a time, blending between the legend's colour stops
     colours = [_hex(c) for c in legend.get("colors", [])] or [(0, 0, 0), (255, 255, 255)]
     bar_w, bar_h = min(width, 520), 22
     for i in range(bar_w):
@@ -82,12 +103,18 @@ def _draw_legend(draw, legend, x, y, width):
 
 
 def _draw_north_arrow(draw, x, y):
+    """A simple arrow with an N under it. The pictures always have north at the top."""
     draw.polygon([(x, y), (x - 14, y + 34), (x, y + 26), (x + 14, y + 34)], fill=TEXT)
     draw.text((x, y + 40), "N", font=_font(18, bold=True), fill=TEXT, anchor="mt")
 
 
 def _draw_scale_bar(draw, bounds, map_box):
-    """bounds = [south, north, west, east] of the picture (Web Mercator image)."""
+    """Draws a scale bar in the bottom left corner of the map.
+
+    bounds is the area the picture covers, as [south, north, west, east]. The distance per pixel
+    is worked out at the middle latitude, since web map pictures stretch towards the poles. The
+    bar is about a quarter of the map's width, rounded to a tidy distance.
+    """
     south, north, west, east = bounds
     left, top, right, bottom = map_box
     km_per_px = (east - west) * 111.32 * math.cos(math.radians((south + north) / 2)) / max(right - left, 1)
@@ -104,9 +131,16 @@ def _draw_scale_bar(draw, bounds, map_box):
 
 
 def export_jpeg(image_path, title, subtitle="", legend=None, bounds=None, quality=92):
+    """Builds the finished map page and returns it as JPEG bytes.
+
+    image_path  the result's picture
+    legend      the result's legend, if it has one
+    bounds      the area the picture covers; without it there's no scale bar
+    """
     picture = Image.open(image_path).convert("RGBA")
     if picture.width > MAX_MAP_WIDTH:
         picture = picture.resize((MAX_MAP_WIDTH, round(picture.height * MAX_MAP_WIDTH / picture.width)), Image.LANCZOS)
+    # JPEG has no transparency, so see-through parts of the picture become white
     flattened = Image.new("RGBA", picture.size, PAGE + (255,))
     flattened.alpha_composite(picture)
 

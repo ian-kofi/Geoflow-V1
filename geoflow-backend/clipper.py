@@ -1,7 +1,11 @@
-"""Clips satellite imagery to a boundary polygon.
+"""Cuts satellite imagery to the shape of an outline.
 
-Works in Web Mercator because both the tile mosaic and the map tiles are
-Mercator images; pixels map linearly to EPSG:3857 metres.
+Used in two places: the Satellite Photo node's picture (clip_satellite), and the zoomable
+satellite layer on the map, which asks for one tile at a time (clipped_tile). Anything outside
+the outline becomes transparent.
+
+Everything here works in Web Mercator (EPSG:3857), the projection web maps use. The tiles are
+already in it, so each pixel is an equal step in metres and the maths stays simple.
 """
 import io
 import math
@@ -21,11 +25,12 @@ from shapely.prepared import prep
 from compositor import EARTH_RADIUS, _to_mercator, lonlat_to_mercator
 from satellite_fetcher import TILE_SIZE, _fetch_tile
 
-HALF_WORLD = math.pi * EARTH_RADIUS
-TILE_CACHE_HEADERS = {"Cache-Control": "public, max-age=604800"}
+HALF_WORLD = math.pi * EARTH_RADIUS   # distance from the map's centre to its edge, in metres
+TILE_CACHE_HEADERS = {"Cache-Control": "public, max-age=604800"}   # browsers may keep tiles a week
 
 
 def _empty_png():
+    """A fully transparent tile, sent for tiles that are completely outside the outline."""
     buffer = io.BytesIO()
     Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0)).save(buffer, "PNG", optimize=True)
     return buffer.getvalue()
@@ -35,23 +40,29 @@ EMPTY_TILE = _empty_png()
 
 
 def mercator_to_lonlat(x, y):
+    """Web Mercator metres back to longitude and latitude."""
     return math.degrees(x / EARTH_RADIUS), math.degrees(2 * math.atan(math.exp(y / EARTH_RADIUS)) - math.pi / 2)
 
 
 @lru_cache(maxsize=16)
 def _load_boundary(path, mtime):
+    """Reads an outline file. `mtime` is only there so the cache notices when the file changes."""
     gdf = _to_mercator(gpd.read_file(path))
-    # Dissolve admin units into one outline so internal borders don't leave seams.
+    # Merge regions into one shape, so the borders between them don't show as thin gaps.
     geom = unary_union(gdf.geometry.make_valid())
     return geom, prep(geom)
 
 
 def boundary_shape(path):
-    """(geometry, prepared geometry) in EPSG:3857, cached until the file changes."""
+    """The outline as one shape in Web Mercator, plus a "prepared" copy for fast overlap tests.
+
+    The map asks for many tiles in a row, so the outline is kept in memory until its file changes.
+    """
     return _load_boundary(path, os.path.getmtime(path))
 
 
 def _mask(geom, bounds, width, height):
+    """A grid of True and False, the size of the picture, saying which pixels are inside the outline."""
     minx, miny, maxx, maxy = bounds
     part = shapely.clip_by_rect(geom, minx, miny, maxx, maxy)
     if part.is_empty:
@@ -62,10 +73,10 @@ def _mask(geom, bounds, width, height):
 
 
 def clip_satellite(image_path, sat_bounds, boundary_path, tag=""):
-    """Masks the mosaic to the boundary and trims it to the boundary's extent.
+    """Cuts the stitched satellite picture to the outline and trims off the empty edges.
 
-    Returns (filename, [south, north, west, east]) of the clipped WebP
-    (transparent outside the boundary).
+    Returns the new picture's file name (a WebP, transparent outside the outline) and the
+    area it now covers, as [south, north, west, east].
     """
     south, north, west, east = (float(v) for v in sat_bounds)
     x0, y0 = lonlat_to_mercator(west, south)
@@ -87,7 +98,7 @@ def clip_satellite(image_path, sat_bounds, boundary_path, tag=""):
     clipped = Image.fromarray(np.dstack([rgb, alpha]), "RGBA")
 
     output_filename = f"satellite_{tag}_clipped.webp" if tag else "satellite_clipped.webp"
-    # WebP keeps transparency at a fraction of PNG's size for photographic imagery.
+    # WebP keeps the transparency, and for photos it's a fraction of the size of a PNG.
     clipped.save(os.path.join("outputs", output_filename), "WEBP", quality=88, method=4)
 
     px_w, px_h = (x1 - x0) / width, (y1 - y0) / height
@@ -98,7 +109,11 @@ def clip_satellite(image_path, sat_bounds, boundary_path, tag=""):
 
 
 def clipped_tile(z, x, y, boundary_path):
-    """One map tile masked to the boundary. Returns (bytes, media type)."""
+    """One map tile cut to the outline. Returns the image bytes and their type.
+
+    Tiles completely outside the outline come back empty without downloading anything, and
+    tiles completely inside are sent as they are. Only tiles on the edge need cutting.
+    """
     geom, prepared = boundary_shape(boundary_path)
     size = 2 * HALF_WORLD / 2 ** z
     minx = -HALF_WORLD + x * size
@@ -114,7 +129,7 @@ def clipped_tile(z, x, y, boundary_path):
 
     buffer = io.BytesIO()
     if prepared.contains(tile_box):
-        tile.save(buffer, "JPEG", quality=90)        # fully inside: no mask needed
+        tile.save(buffer, "JPEG", quality=90)        # all inside, so nothing to cut
         return buffer.getvalue(), "image/jpeg"
 
     mask = _mask(geom, bounds, tile.width, tile.height)

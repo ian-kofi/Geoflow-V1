@@ -1,3 +1,11 @@
+/**
+ * The whole editor: the node palette on the left, the canvas in the middle and the
+ * Inspector and Map panel on the right.
+ *
+ * Nodes and connections are kept in React Flow's state here. Running them is handled by
+ * WorkflowContext (see workflow/useWorkflowRunner.js), which sends each node to the backend.
+ * The workflow is saved in the browser as you go, so it's still there after a reload.
+ */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addEdge,
@@ -28,11 +36,14 @@ import { UiContext } from './uiContext.js';
 import QuickMapDialog from './components/QuickMapDialog.jsx';
 import Icon from './components/Icon.jsx';
 
+// Every node type is drawn by the same component, GeoNode, which reads its look from the registry.
 const nodeTypes = Object.fromEntries(Object.keys(NODE_TYPES).map((type) => [type, GeoNode]));
-// Public demo builds (VITE_DEMO_NOTICE=1) explain that the free server is slower and less detailed.
+// The public demo is built with VITE_DEMO_NOTICE=1, which shows a note that the free server is
+// slower and less detailed.
 const DEMO_NOTICE = import.meta.env.VITE_DEMO_NOTICE === '1';
 const DEMO_NOTICE_KEY = 'geoflow:demo-notice-dismissed';
 
+/** True if this visitor has already closed the demo note. */
 function demoNoticeDismissed() {
   try {
     return localStorage.getItem(DEMO_NOTICE_KEY) === '1';
@@ -42,7 +53,13 @@ function demoNoticeDismissed() {
 }
 const TRANSIENT_STATUS = new Set(['queued', 'running']);
 
-/** Brings saved/imported nodes into a consistent state (files and in-flight runs don't survive a reload). */
+/**
+ * Tidies a saved or imported workflow so it's safe to load.
+ *
+ * Drops nodes of unknown types and connections to missing nodes. Nodes that were running when
+ * the page closed can't still be running, and chosen files can't be saved, so those are reset.
+ * Settings added since the workflow was saved get their default values.
+ */
 function sanitize({ nodes = [], edges = [] }) {
   const valid = nodes.filter((n) => NODE_TYPES[n.type]);
   const ids = new Set(valid.map((n) => n.id));
@@ -52,7 +69,7 @@ function sanitize({ nodes = [], edges = [] }) {
       const { geoFiles, startedAt, ...rest } = data ?? {};
       const status = TRANSIENT_STATUS.has(rest.status) ? (rest.result ? 'stale' : 'idle') : rest.status ?? 'idle';
       const { resizable } = NODE_TYPES[type];
-      // Resizable nodes keep their size; older saves get the default size.
+      // Resizable nodes keep their size. Older saves without one get the default size.
       const size = resizable
         ? { width: width ?? resizable.width, ...(rest.collapsed ? {} : { height: height ?? resizable.height }) }
         : {};
@@ -61,13 +78,14 @@ function sanitize({ nodes = [], edges = [] }) {
     edges: edges
       .filter((e) => ids.has(e.source) && ids.has(e.target))
       .map(({ id, source, target, targetHandle }) => {
-        // Saved before the node had named inputs: connect to its first one.
+        // Saved before this node type had named inputs, so connect it to the first one.
         const handle = targetHandle ?? NODE_TYPES[typeOf.get(target)].inputs?.[0]?.id;
         return { id: id ?? `e_${source}_${target}`, source, target, ...(handle ? { targetHandle: handle } : {}) };
       }),
   };
 }
 
+/** The workflow to start with: the one saved in the browser, or an empty canvas on a first visit. */
 function loadInitial() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -75,7 +93,7 @@ function loadInitial() {
   } catch {
     /* fall through to an empty canvas */
   }
-  // First visit: start empty and open the "Make a map" assistant.
+  // First visit, so start empty and open the Make a map assistant.
   return { nodes: [], edges: [], firstVisit: true };
 }
 
@@ -96,7 +114,8 @@ function Editor() {
   const [quickMapOpen, setQuickMapOpen] = useState(initial.firstVisit);
   const [pendingRun, setPendingRun] = useState(null);
 
-  // Run a freshly built map once its nodes are in the flow store.
+  // After the Make a map assistant adds its nodes, wait until they're on the canvas, then zoom
+  // to them and run the final node (which runs everything it needs first).
   useEffect(() => {
     if (!pendingRun || running || !getNodes().some((n) => n.id === pendingRun.outputId)) return;
     const { outputId, nodeIds } = pendingRun;
@@ -105,6 +124,8 @@ function Editor() {
     runNode(outputId);
   }, [pendingRun, nodes, running, getNodes, fitView, runNode]);
 
+  // Builds the workflow for a Make a map choice next to anything already on the canvas,
+  // selects its final node and queues it to run.
   const createQuickMap = useCallback(
     (recipe, place) => {
       const built = recipe.build(place);
@@ -124,6 +145,7 @@ function Editor() {
   const [mapFocus, setMapFocus] = useState(null);
   const [mapExpanded, setMapExpanded] = useState(false);
   const toggleMapExpanded = useCallback(() => setMapExpanded((e) => !e), []);
+  // Shared with every node through UiContext
   const ui = useMemo(
     () => ({
       showOnMap: (bounds) => {
@@ -144,13 +166,14 @@ function Editor() {
   });
   const canvasRef = useRef(null);
 
-  // Autosave (debounced so dragging doesn't serialize on every frame)
+  // Save the workflow in the browser. It waits half a second after the last change, so
+  // dragging a node doesn't save on every frame.
   useEffect(() => {
     const t = setTimeout(() => {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitize({ nodes, edges })));
       } catch {
-        /* storage full or unavailable — autosave is best-effort */
+        /* storage is full or not available; saving is a nice extra, so just carry on */
       }
     }, 500);
     return () => clearTimeout(t);
@@ -160,11 +183,11 @@ function Editor() {
     try {
       localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? 'collapsed' : 'expanded');
     } catch {
-      /* storage unavailable — the choice just won't persist */
+      /* storage isn't available, so the choice just won't be remembered */
     }
   }, [sidebarCollapsed]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts: Ctrl+Enter runs the workflow (add Shift to run everything again) and Esc stops it
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -180,6 +203,7 @@ function Editor() {
 
   const expandedLayers = useMemo(() => (mapExpanded ? collectMapLayers(nodes) : []), [mapExpanded, nodes]);
 
+  // Totals for the toolbar's progress bar
   const counts = useMemo(() => {
     const c = { total: nodes.length, done: 0, error: 0, collapsed: 0 };
     nodes.forEach((n) => {
@@ -190,7 +214,8 @@ function Editor() {
     return c;
   }, [nodes]);
 
-  // Edge animation depends only on node status; avoid rebuilding edges while dragging.
+  // Connections into a running node are animated. Moving a node changes `nodes` but not their
+  // status, so the connections are only rebuilt when a status actually changes.
   const edgeStateKey = nodes.map((n) => `${n.id}:${n.data.status}`).join('|');
   const displayEdges = useMemo(() => {
     const status = new Map(nodes.map((n) => [n.id, n.data.status]));
@@ -204,7 +229,8 @@ function Editor() {
       const current = getEdges();
       const handle = conn.targetHandle ?? null;
       const incoming = current.filter((e) => e.target === conn.target);
-      // A named input (e.g. "Mask") takes one connection; the default input takes many.
+      // A named input (like "Mask") takes one connection, while a node's plain input can take
+      // several. The same two nodes can't be connected twice, and loops aren't allowed.
       if (handle && incoming.some((e) => e.targetHandle === handle)) return false;
       if (incoming.some((e) => e.source === conn.source && (e.targetHandle ?? null) === handle)) return false;
       return !createsCycle(conn.source, conn.target, current);
@@ -212,6 +238,7 @@ function Editor() {
     [getEdges],
   );
 
+  // A new connection changes the target's inputs, so its old result no longer counts
   const onConnect = useCallback(
     (conn) => {
       setEdges((eds) => addEdge({ ...conn, id: `e_${conn.source}_${conn.target}${conn.targetHandle ? `_${conn.targetHandle}` : ''}` }, eds));
@@ -223,6 +250,8 @@ function Editor() {
   const onEdgesDelete = useCallback((deleted) => deleted.forEach((e) => markStale(e.target)), [markStale]);
   const onNodesDelete = useCallback((deleted) => deleted.forEach((n) => fileStore.delete(n.id)), []);
 
+  // Adds a node at `position`, or near the middle of the canvas if none is given (when a
+  // palette item is clicked rather than dragged).
   const addNode = useCallback(
     (type, position) => {
       let pos = position;
@@ -245,6 +274,7 @@ function Editor() {
     e.dataTransfer.dropEffect = 'move';
   }, []);
 
+  // A node dragged in from the palette lands with its title bar under the pointer
   const onDrop = useCallback(
     (e) => {
       e.preventDefault();
@@ -256,6 +286,7 @@ function Editor() {
     [screenToFlowPosition, addNode],
   );
 
+  // Swaps the whole canvas for another workflow (a template, an import or a clear)
   const replaceWorkflow = useCallback(
     (workflow) => {
       nodes.forEach((n) => fileStore.delete(n.id));
@@ -299,7 +330,7 @@ function Editor() {
     try {
       localStorage.setItem(DEMO_NOTICE_KEY, '1');
     } catch {
-      /* private mode: it just shows again next visit */
+      /* storage isn't available, so it will show again next visit */
     }
   }, []);
 
@@ -346,7 +377,7 @@ function Editor() {
             {!mapExpanded && <Controls position="bottom-left" showInteractive={false} style={{ marginBottom: 32 }} />}
             {!mapExpanded && <MiniMap position="bottom-right" pannable zoomable />}
             {mapExpanded && (
-              // Covers the node canvas (which stays mounted underneath); the toolbar panel sits above it.
+              // The expanded map covers the canvas. The nodes stay underneath, and the toolbar sits on top.
               <div className="gf-canvas__map nodrag nopan nowheel">
                 <Suspense fallback={<div className="gf-map gf-map--loading">Loading map…</div>}>
                   <MapPreview layers={expandedLayers} theme={theme} focus={mapFocus} expanded onToggleExpand={toggleMapExpanded} />
@@ -419,6 +450,7 @@ function Editor() {
   );
 }
 
+/** The app, wrapped in the providers the editor needs: React Flow's and the workflow runner's. */
 export default function App() {
   return (
     <ReactFlowProvider>

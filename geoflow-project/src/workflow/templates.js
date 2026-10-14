@@ -1,5 +1,14 @@
+/**
+ * Example workflows listed under Templates in the sidebar. Each `build` returns a set of nodes
+ * and connections that replace whatever is on the canvas. The place can be changed afterwards
+ * in the Place node.
+ *
+ * These are for people who want to see a full workflow. The Make a map assistant uses
+ * recipes.js instead.
+ */
 import { createNode } from '../nodes/registry.js';
 
+/** A connection between two nodes, optionally into a named input such as "mask". */
 function edge(source, target, targetHandle) {
   return {
     id: `e_${source.id}_${target.id}${targetHandle ? `_${targetHandle}` : ''}`,
@@ -13,7 +22,7 @@ export const TEMPLATES = [
   {
     id: 'slope-risk',
     name: 'Slope stability',
-    description: 'DEM → slope → Low / Medium / High risk classes, with hillshade and contours.',
+    description: 'Ground height turned into steepness, grouped into Low, Medium and High risk, with shaded relief and contours.',
     build: (place = 'Akosombo') => {
       const location = createNode('LocationNode', { x: 0, y: 160 }, { location: place });
       const boundary = createNode('BoundaryNode', { x: 320, y: 140 }, { boundarySource: 'city' });
@@ -42,7 +51,7 @@ export const TEMPLATES = [
   {
     id: 'vegetation',
     name: 'Vegetation (NDVI)',
-    description: 'Sentinel-2 → NDVI clipped to a boundary, with zonal statistics per district.',
+    description: 'Plant health (NDVI) from Sentinel-2, cut to the outline, with an average for each district.',
     build: (place = 'Accra') => {
       const location = createNode('LocationNode', { x: 0, y: 160 }, { location: place });
       const boundary = createNode('BoundaryNode', { x: 320, y: 140 }, { boundarySource: 'city' });
@@ -69,7 +78,7 @@ export const TEMPLATES = [
   {
     id: 'composite',
     name: 'Satellite composite',
-    description: 'Boundary, satellite imagery and roads combined into one map.',
+    description: 'An outline, a satellite photo and main roads combined into one map.',
     build: (place = 'Ghana') => {
       const location = createNode('LocationNode', { x: 0, y: 200 }, { location: place });
       const boundary = createNode('BoundaryNode', { x: 340, y: 40 }, { boundaryAdminLevel: 1 });
@@ -94,7 +103,7 @@ export const TEMPLATES = [
   {
     id: 'vector',
     name: 'Country to PNG',
-    description: 'Plot a country as SVG and rasterize it at high DPI.',
+    description: 'Draw a country as an SVG and turn it into a high resolution picture.',
     build: (place = 'Ghana') => {
       const location = createNode('LocationNode', { x: 0, y: 80 }, { location: place });
       const shape = createNode('GeoFileNode', { x: 340, y: 40 });
@@ -109,7 +118,7 @@ export const TEMPLATES = [
   {
     id: 'city',
     name: 'City streets',
-    description: 'OpenStreetMap city outline with roads and waterways.',
+    description: 'A city outline with its roads and rivers over a satellite photo.',
     build: (place = 'Accra') => {
       const location = createNode('LocationNode', { x: 0, y: 160 }, { location: place });
       const boundary = createNode('BoundaryNode', { x: 340, y: 120 }, { boundarySource: 'city' });

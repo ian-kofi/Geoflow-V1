@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GeoFlow</title>
     <script>
-      // Apply the saved theme before first paint so the page doesn't flash the wrong colors.
+      // Set the saved theme before anything is drawn, so the page doesn't flash the wrong colours.
       try {
         var t = localStorage.getItem('geoflow:theme');
         if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';

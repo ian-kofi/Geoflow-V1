@@ -1,21 +1,24 @@
 /**
- * Spatial analysis node types (backend: geoflow-backend/spatial/nodes.py).
+ * The analysis node types. They work like the ones in registry.js; the code that runs them is
+ * in geoflow-backend/spatial/nodes.py.
  *
- * `inputs` gives a node several named input handles; the handle id travels to
- * the backend as `_input` on each parent output so it knows which is which.
+ * `inputs` gives a node several named inputs (like "Raster" and "Mask"). When the workflow
+ * runs, each connected result is sent with an `_input` value naming the input it's plugged
+ * into, so the backend can tell them apart.
  */
 
 import { compassDirection } from '../components/AngleDials.jsx';
 
-const isoDate =(daysAgo = 0) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+/** Today's date minus `daysAgo` days, as YYYY-MM-DD. */
+const isoDate = (daysAgo = 0) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
 const COLLECTIONS = [
   ['sentinel-2-l2a', 'Satellite photo · sharp (Sentinel-2, 10 m)'],
   ['landsat-c2-l2', 'Satellite photo · wider history (Landsat, 30 m)'],
   ['cop-dem-glo-30', 'Ground height / terrain (DEM, 30 m)'],
-  ['jrc-gsw', 'Past flooding & water, 1984–2021 (JRC, 30 m)'],
+  ['jrc-gsw', 'Past flooding and water, 1984 to 2021 (JRC, 30 m)'],
 ];
-// These datasets are not tied to a date or cloud cover.
+// Ground height and water history don't change over time, so they have no dates or cloud limit.
 const isDem = (d) => d.collection === 'cop-dem-glo-30' || d.collection === 'jrc-gsw';
 
 const INDICES = [
@@ -45,17 +48,20 @@ const STATS = [
   ['count', 'Number of pixels'],
 ];
 
+/** The label for a value in a list of [value, label] options. */
 const label = (options, value) => options.find(([v]) => v === value)?.[1] ?? value;
 
 export const SPATIAL_NODE_TYPES = {
-  // ---- Ingestion ----------------------------------------------------------
+  // Getting data
+
   StacNode: {
-    label: 'Satellite & Elevation Data',
+    label: 'Satellite and Elevation Data',
     category: 'source',
     icon: 'cloudDown',
     description:
-      'Fresh satellite photos (with a cloud-free mix of the clearest days) or ground height for your area, from Microsoft Planetary Computer. GIS term: STAC search.',
-    // Getter so each new node gets "the last 3 months" relative to today.
+      'Recent satellite photos (a cloud free mix of the clearest days) or ground height for your area, from Microsoft Planetary Computer. GIS term: STAC search.',
+    // Written as a getter so each new node gets the last 3 months up to today, not up to the
+    // day the app was loaded.
     get defaults() {
       return { collection: 'sentinel-2-l2a', startDate: isoDate(90), endDate: isoDate(0), maxCloud: 20 };
     },
@@ -65,14 +71,18 @@ export const SPATIAL_NODE_TYPES = {
         label: 'What to get',
         type: 'select',
         options: COLLECTIONS,
-        hint: 'Photos combine the clearest days in the date range; large areas and long ranges take a few minutes.',
+        hint: 'Photos combine the clearest days in the date range. Large areas and long date ranges take a few minutes.',
       },
       { key: 'startDate', label: 'From', type: 'date', hidden: isDem },
       { key: 'endDate', label: 'To', type: 'date', hidden: isDem },
       { key: 'maxCloud', label: 'Skip photos cloudier than', type: 'slider', min: 0, max: 100, step: 5, suffix: '%', hidden: isDem },
     ],
     summary: (d) =>
-      d.collection === 'jrc-gsw' ? 'Water history 1984–2021' : isDem(d) ? 'Ground height (30 m)' : `${label(COLLECTIONS, d.collection).split(' ·')[0]} · ${d.startDate} → ${d.endDate}`,
+      d.collection === 'jrc-gsw'
+        ? 'Water history 1984 to 2021'
+        : isDem(d)
+          ? 'Ground height (30 m)'
+          : `${label(COLLECTIONS, d.collection).split(' ·')[0]} · ${d.startDate} to ${d.endDate}`,
   },
   LocalFileNode: {
     label: 'Your Own File',
@@ -92,7 +102,8 @@ export const SPATIAL_NODE_TYPES = {
     summary: (d) => d.localFiles?.root || 'No file chosen',
   },
 
-  // ---- Terrain ------------------------------------------------------------
+  // Terrain
+
   SlopeNode: {
     label: 'Steepness (Slope)',
     category: 'terrain',
@@ -109,7 +120,7 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Slope Direction (Aspect)',
     category: 'terrain',
     icon: 'compass',
-    description: 'Which compass direction each slope faces (north, east, south, west), e.g. for sunlight or farming. GIS term: aspect.',
+    description: 'Which compass direction each slope faces (north, east, south or west), for things like sunlight or farming. GIS term: aspect.',
     defaults: {},
     params: [],
     summary: () => 'Facing direction',
@@ -151,7 +162,7 @@ export const SPATIAL_NODE_TYPES = {
     category: 'terrain',
     icon: 'droplet',
     description:
-      'How many metres each place sits above the river it drains into. Places only a few metres above their river flood first, so this is the key terrain input for flood mapping. Works out rivers from Ground height data, and adds any rivers you connect to Rivers (important for flat land and big rivers that start outside your area). GIS term: HAND, with stream burning.',
+      'How many metres each place sits above the river it drains into. Places only a few metres above their river flood first, so this is the main terrain input for flood mapping. It works out rivers from Ground height data and adds any rivers you connect to Rivers, which matters for flat land and for big rivers that start outside your area. GIS term: HAND, with stream burning.',
     inputs: [
       { id: 'dem', label: 'Ground height' },
       { id: 'rivers', label: 'Rivers (optional)' },
@@ -164,7 +175,7 @@ export const SPATIAL_NODE_TYPES = {
         type: 'number',
         min: 0.1,
         step: 0.5,
-        hint: 'About 1 includes small streams; 10–50 keeps only larger rivers.',
+        hint: 'About 1 includes small streams. 10 to 50 keeps only larger rivers.',
       },
       {
         key: 'terrainStreams',
@@ -177,13 +188,14 @@ export const SPATIAL_NODE_TYPES = {
     summary: (d) => `Rivers from ${d.minArea} km²`,
   },
 
-  // ---- Raster algorithms --------------------------------------------------
+  // Analysing images (rasters)
+
   WeightedOverlayNode: {
     label: 'Combine Factors',
     category: 'raster',
     icon: 'scale',
     description:
-      'Turns up to four factors into one 0–1 risk score: each is rescaled to 0–1, flipped if lower values mean more risk, and averaged using your weights. GIS term: weighted overlay / multi-criteria analysis.',
+      'Turns up to four factors into one risk score from 0 to 1. Each factor is scaled from 0 to 1, flipped if lower values mean more risk, and then averaged using your weights. GIS term: weighted overlay or multi-criteria analysis.',
     inputs: [
       { id: 'A', label: 'A' },
       { id: 'B', label: 'B' },
@@ -198,22 +210,23 @@ export const SPATIAL_NODE_TYPES = {
       weightD: 1, riskD: 'high', rangeD: '',
     },
     params: [
-      { key: 'resultName', label: 'Result name', type: 'text', placeholder: 'e.g. Flood susceptibility' },
+      { key: 'resultName', label: 'Result name', type: 'text', placeholder: 'For example Flood susceptibility' },
+      // The same three settings for each of the four inputs
       ...['A', 'B', 'C', 'D'].flatMap((key) => [
-      { key: `weight${key}`, label: `${key}: importance (weight)`, type: 'number', min: 0, step: 1 },
-      {
-        key: `risk${key}`,
-        label: `${key}: which way is risky?`,
-        type: 'select',
-        options: [['high', 'Higher values = more risk'], ['low', 'Lower values = more risk']],
-      },
-      {
-        key: `range${key}`,
-        label: `${key}: from no risk to full risk`,
-        type: 'text',
-        placeholder: 'Automatic, or e.g. 0, 15',
-        hint: key === 'A' ? 'Two values: where risk starts and where it is complete. Leave empty to use the data’s own range.' : undefined,
-      },
+        { key: `weight${key}`, label: `${key}: importance (weight)`, type: 'number', min: 0, step: 1 },
+        {
+          key: `risk${key}`,
+          label: `${key}: which way is risky?`,
+          type: 'select',
+          options: [['high', 'Higher values mean more risk'], ['low', 'Lower values mean more risk']],
+        },
+        {
+          key: `range${key}`,
+          label: `${key}: from no risk to full risk`,
+          type: 'text',
+          placeholder: 'Automatic, or for example 0, 15',
+          hint: key === 'A' ? 'Two values: where risk starts and where it is complete. Leave empty to use the data’s own range.' : undefined,
+        },
       ]),
     ],
     summary: (d) =>
@@ -226,7 +239,7 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Raster Calculator',
     category: 'raster',
     icon: 'calculator',
-    description: 'Advanced: do maths with up to four images, cell by cell (GIS term: map algebra / raster calculator).',
+    description: 'Advanced: do maths with up to four images, cell by cell. GIS term: map algebra or raster calculator.',
     inputs: [
       { id: 'A', label: 'A' },
       { id: 'B', label: 'B' },
@@ -240,17 +253,17 @@ export const SPATIAL_NODE_TYPES = {
         label: 'Expression',
         type: 'text',
         mono: true,
-        placeholder: 'e.g. (A.nir - A.red) / (A.nir + A.red)',
-        hint: 'A–D are the inputs (band 1); A2 is band 2; A.nir a named band. Operators + − * / ** > < == and/or. Functions: sqrt abs log exp min max where clip round.',
+        placeholder: 'For example (A.nir - A.red) / (A.nir + A.red)',
+        hint: 'A, B, C and D are the inputs (their first band). A2 is the second band of A, and A.nir its band named nir. You can use + - * / ** > < == and or, and the functions sqrt, abs, log, exp, min, max, where, clip and round.',
       },
     ],
     summary: (d) => d.expression || 'No expression',
   },
   SpectralIndexNode: {
-    label: 'Vegetation & Water Index',
+    label: 'Vegetation and Water Index',
     category: 'raster',
     icon: 'leaf',
-    description: 'Measures how green (healthy plants), wet or built-up each place is, from a satellite photo. GIS term: spectral index (NDVI…).',
+    description: 'Measures how green (healthy plants), wet or built up each place is, from a satellite photo. GIS term: spectral index, such as NDVI.',
     defaults: { index: 'ndvi' },
     params: [{ key: 'index', label: 'Measure', type: 'select', options: INDICES }],
     summary: (d) => label(INDICES, d.index),
@@ -259,14 +272,14 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Group into Classes',
     category: 'raster',
     icon: 'classify',
-    description: 'Sorts values into a few named groups, e.g. steepness into Low / Medium / High risk. GIS term: reclassify.',
+    description: 'Sorts values into a few named groups, like steepness into Low, Medium and High risk. GIS term: reclassify.',
     defaults: { method: 'manual', breaks: '15, 30', classes: 3, labels: 'Low, Medium, High' },
     params: [
       {
         key: 'method',
         label: 'Method',
         type: 'select',
-        options: [['manual', 'I’ll choose the cut-off values'], ['equal', 'Equal-sized ranges'], ['quantile', 'Equal number of places in each']],
+        options: [['manual', 'I’ll choose the cut-off values'], ['equal', 'Equal sized ranges'], ['quantile', 'Equal number of places in each']],
       },
       { key: 'breaks', label: 'Cut-off values', type: 'text', placeholder: '15, 30', hidden: (d) => d.method !== 'manual', hint: 'Smallest first, separated by commas. Two values make three groups.' },
       { key: 'classes', label: 'Number of groups', type: 'number', min: 2, max: 12, step: 1, hidden: (d) => d.method === 'manual' },
@@ -279,7 +292,7 @@ export const SPATIAL_NODE_TYPES = {
     category: 'raster',
     icon: 'grid',
     description:
-      'Sets the cell size of a raster, finer or coarser (GIS: Resample). Connect vector shapes instead and it turns them into a raster at that cell size (GIS: Feature to Raster). Finer cells are interpolated, so they look smoother but hold no extra real detail.',
+      'Sets the cell size of a raster, finer or coarser (GIS: Resample). Connect shapes instead and it turns them into a raster with that cell size (GIS: Feature to Raster). Finer cells are blended from the original ones, so they look smoother but don’t hold any extra real detail.',
     defaults: { cellSize: 10, method: 'cubic', field: '' },
     params: [
       {
@@ -288,7 +301,7 @@ export const SPATIAL_NODE_TYPES = {
         type: 'number',
         min: 0.1,
         step: 5,
-        hint: 'Smaller = finer. Ground height and slope data start at 30 m; satellite photos at 10 m.',
+        hint: 'Smaller is finer. Ground height and slope data start at 30 m, and satellite photos at 10 m.',
       },
       {
         key: 'method',
@@ -302,13 +315,13 @@ export const SPATIAL_NODE_TYPES = {
           ['mode', 'Majority · for classes, when making cells bigger'],
           ['average', 'Average · when making cells bigger'],
         ],
-        hint: 'Classified rasters always use Nearest or Majority, so no new classes are invented.',
+        hint: 'Rasters of classes always use Nearest or Majority, so no new classes are invented.',
       },
       {
         key: 'field',
-        label: 'Cell values from (vector input only)',
+        label: 'Cell values from (shapes only)',
         type: 'text',
-        placeholder: 'Optional attribute, e.g. shapeName',
+        placeholder: 'Optional attribute, for example shapeName',
         hint: 'Leave empty to mark every cell inside the shapes as 1.',
       },
     ],
@@ -318,7 +331,7 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Cut to Outline',
     category: 'raster',
     icon: 'crop',
-    description: 'Keeps only the part of an image inside an outline (connect it to Mask). GIS term: clip raster.',
+    description: 'Keeps only the part of an image inside an outline (connect the outline to Mask). GIS term: clip raster.',
     inputs: [
       { id: 'raster', label: 'Raster' },
       { id: 'mask', label: 'Mask' },
@@ -331,7 +344,7 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Average per Area',
     category: 'raster',
     icon: 'table',
-    description: 'Works out the average (or highest, lowest…) value inside each area, e.g. greenness per district. Makes a map and a spreadsheet table (CSV). GIS term: zonal statistics.',
+    description: 'Works out the average (or highest, lowest and so on) value inside each area, like greenness per district. Makes a map and a spreadsheet table (CSV). GIS term: zonal statistics.',
     inputs: [
       { id: 'raster', label: 'Raster' },
       { id: 'zones', label: 'Zones' },
@@ -344,12 +357,13 @@ export const SPATIAL_NODE_TYPES = {
     summary: (d) => `${label(STATS, d.stat)} of band ${d.band}`,
   },
 
-  // ---- Cartography --------------------------------------------------------
+  // Styling
+
   ColourMapNode: {
     label: 'Colour Map',
     category: 'process',
     icon: 'palette',
-    description: 'Changes the colours of an image result, e.g. green-to-brown "terrain" colours for ground height. The data itself is unchanged.',
+    description: 'Changes the colours of an image result, like green to brown "terrain" colours for ground height. The data itself stays the same.',
     defaults: { colormap: 'terrain', reverse: false, stretch: 'auto', min: '', max: '', band: 1, hillshade: false },
     params: [
       { key: 'colormap', label: 'Colour map', type: 'colormap' },
@@ -358,27 +372,28 @@ export const SPATIAL_NODE_TYPES = {
         key: 'stretch',
         label: 'Value range',
         type: 'select',
-        options: [['auto', 'Automatic (ignores outliers)'], ['minmax', 'Full min – max'], ['custom', 'Custom']],
+        options: [['auto', 'Automatic (ignores outliers)'], ['minmax', 'Lowest to highest value'], ['custom', 'Custom']],
       },
       { key: 'min', label: 'Min value', type: 'number', hidden: (d) => d.stretch !== 'custom' },
       { key: 'max', label: 'Max value', type: 'number', hidden: (d) => d.stretch !== 'custom' },
-      { key: 'band', label: 'Band', type: 'number', min: 1, step: 1, hint: 'For multi-band rasters, e.g. 4 = NIR in a Sentinel-2 search.' },
+      { key: 'band', label: 'Band', type: 'number', min: 1, step: 1, hint: 'For rasters with several bands. In a Sentinel-2 photo, for example, 4 is near infrared.' },
       {
         key: 'hillshade',
         label: 'Add hillshade relief',
         type: 'toggle',
-        hint: 'Shades the colours with the terrain’s shadows — best for elevation data.',
+        hint: 'Shades the colours with the terrain’s shadows. Works best with ground height.',
       },
     ],
     summary: (d) => `${d.colormap}${d.reverse ? ' (reversed)' : ''}${d.hillshade ? ' · with relief' : ''}`,
   },
 
-  // ---- Vector algorithms --------------------------------------------------
+  // Shape tools (vectors)
+
   BufferNode: {
     label: 'Zone Around (Buffer)',
     category: 'vector',
     icon: 'buffer',
-    description: 'Draws a zone a set distance around shapes, e.g. 500 m either side of a river. Negative distances shrink areas. GIS term: buffer.',
+    description: 'Draws a zone a set distance around shapes, like 500 m either side of a river. Negative distances shrink areas. GIS term: buffer.',
     defaults: { distance: 1000, dissolve: false },
     params: [
       { key: 'distance', label: 'Distance (m)', type: 'number', step: 100 },
@@ -391,7 +406,7 @@ export const SPATIAL_NODE_TYPES = {
     category: 'vector',
     icon: 'ruler',
     description:
-      'Distance in metres from every place to the nearest feature, e.g. to the nearest river or road. Connect an Outline or an image to Area to set the extent. GIS term: Euclidean distance.',
+      'Distance in metres from every place to the nearest feature, like the nearest river or road. Connect an Outline or an image to Area to set the extent. GIS term: Euclidean distance.',
     inputs: [
       { id: 'features', label: 'Features' },
       { id: 'extent', label: 'Area' },
@@ -404,7 +419,7 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Select by Location',
     category: 'vector',
     icon: 'filter',
-    description: 'Keeps (or cuts away) the shapes in Data depending on where they are compared with Mask, e.g. roads inside a district. GIS term: spatial filter / clip.',
+    description: 'Keeps or cuts away the shapes in Data depending on where they are compared with Mask, like roads inside a district. GIS term: spatial filter or clip.',
     inputs: [
       { id: 'data', label: 'Data' },
       { id: 'mask', label: 'Mask' },
@@ -417,9 +432,9 @@ export const SPATIAL_NODE_TYPES = {
     label: 'Merge Shapes',
     category: 'vector',
     icon: 'merge',
-    description: 'Joins shapes into one (or one per group), e.g. districts into regions. GIS term: dissolve.',
+    description: 'Joins shapes into one, or one per group, like districts into regions. GIS term: dissolve.',
     defaults: { field: '' },
-    params: [{ key: 'field', label: 'Group by (optional)', type: 'text', placeholder: 'optional, e.g. shapeName' }],
+    params: [{ key: 'field', label: 'Group by (optional)', type: 'text', placeholder: 'Optional, for example shapeName' }],
     summary: (d) => (d.field ? `By ${d.field}` : 'Merge all'),
   },
 };

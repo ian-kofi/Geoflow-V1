@@ -1,9 +1,17 @@
-"""Microsoft Planetary Computer STAC search + Cloud Optimized GeoTIFF loading.
+"""Satellite photos and elevation data from Microsoft Planetary Computer, for the Satellite and
+Elevation Data node.
 
-Scenes are read straight from the COGs (only the pixels inside the area, from
-the coarsest overview that still meets the target resolution), reprojected to
-the local UTM zone, cloud-masked, and mosaicked least-cloudy-first so gaps in
-one scene are filled from the next.
+Planetary Computer keeps huge archives of free data (Sentinel-2, Landsat, the Copernicus DEM
+and more) as Cloud Optimised GeoTIFFs. Those files can be read in small pieces over the
+internet, so we never download whole scenes, only the pixels inside the area, and only at the
+detail we need.
+
+How a load works:
+    1. search   ask the catalogue (STAC) for scenes covering the area and dates
+    2. grid     set up the output grid in the local UTM zone, so cells are square metres
+    3. read     read each scene onto that grid, removing clouds for satellite photos
+    4. combine  put the scenes together: a cloud free median for small areas, or a mosaic
+                that fills gaps for large ones (see load at the bottom for the details)
 """
 import math
 import os
@@ -31,22 +39,24 @@ from .common import InputError
 from .raster_io import Raster
 
 SEARCH_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
-# Tokens are scoped to a blob storage account + container (not to a collection).
+# Reading the files needs a free access token. Each token is for one storage account and
+# container, not for one collection.
 TOKEN_URL = "https://planetarycomputer.microsoft.com/api/sas/v1/token/{account}/{container}"
 HEADERS = {"User-Agent": "GeoFlowApp/1.0"}
-LOW_MEMORY = os.environ.get("GEOFLOW_LOW_MEMORY") == "1"   # small servers (e.g. 512 MB free hosting)
-MAX_SIDE = 1000 if LOW_MEMORY else 3000           # px; coarser resolution is used for bigger areas
-# Median mode (small areas); the blue stack costs 2 bytes per pixel per scene
+LOW_MEMORY = os.environ.get("GEOFLOW_LOW_MEMORY") == "1"   # small servers, like the free 512 MB demo
+MAX_SIDE = 1000 if LOW_MEMORY else 3000   # longest side of the grid in cells; big areas get bigger cells
+# Most photos combined in median mode. Each one needs a full copy of the grid in memory.
 MAX_OPTICAL_SCENES = 4 if LOW_MEMORY else 16
 MAX_SEARCH_ITEMS = 1000
-COVERAGE_MODE_TILES = 4   # areas spanning more satellite tiles than this use the coverage-first mosaic
-COVERAGE_ROUNDS = 3       # …taking up to this many photos per tile to fill cloud gaps
+COVERAGE_MODE_TILES = 4   # areas covering more satellite tiles than this use coverage mode
+COVERAGE_ROUNDS = 3       # in coverage mode, up to this many photos per tile to fill cloud gaps
 SCENE_WORKERS = 2 if LOW_MEMORY else 8   # photos read at the same time in coverage mode
-GAP_TOLERANCE = 0.01      # fill gaps automatically while more than 1% of the area is empty
-GAP_FILL_CLOUD = 70       # cloud limit for gap-filling photos (their clouds are masked per pixel)
-GAP_FILL_DAYS = 182       # how far back gap-filling may look
-TOKEN_LIFETIME = 40 * 60  # SAS tokens last ~1 h; refresh well before
+GAP_TOLERANCE = 0.01      # keep filling gaps while more than 1% of the area is still empty
+GAP_FILL_CLOUD = 70       # cloud limit for gap filling photos (their clouds are removed pixel by pixel)
+GAP_FILL_DAYS = 182       # how far back in time gap filling may look
+TOKEN_LIFETIME = 40 * 60  # tokens last about an hour, so get a new one well before then
 
+# Settings that make GDAL read files over the internet efficiently and retry when it fails
 GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.TIF",
@@ -57,6 +67,14 @@ GDAL_ENV = {
     "VSI_CACHE": "TRUE",
 }
 
+# The datasets the node offers. For each one:
+#   res        its native cell size in metres
+#   dated      whether to search by date
+#   cloud      whether it has cloud cover to filter on
+#   max_items  most scenes to read
+#   optical    True for satellite photos, which need clouds removed
+#   bands      our band name and the file name for that band in the catalogue
+#   mask       the band that says which pixels are cloud
 COLLECTIONS = {
     "sentinel-2-l2a": {
         "label": "Sentinel-2 L2A", "res": 10, "dated": True, "cloud": True, "max_items": 8, "optical": True,
@@ -74,23 +92,25 @@ COLLECTIONS = {
         "label": "Copernicus DEM 30 m", "res": 30, "dated": False, "cloud": False, "max_items": 16,
         "optical": False, "bands": {"elevation": "data"}, "mask": None,
     },
-    # How often each 30 m cell was water, 1984–2021 (0 = never, 100 = always). 255 marks no data.
+    # How often each 30 m cell was underwater from 1984 to 2021, as a percentage (0 never,
+    # 100 always). 255 means no data.
     "jrc-gsw": {
-        "label": "Surface water history (JRC 1984–2021)", "res": 30, "dated": False, "cloud": False,
+        "label": "Surface water history (JRC, 1984 to 2021)", "res": 30, "dated": False, "cloud": False,
         "max_items": 8, "optical": False, "bands": {"occurrence": "occurrence"}, "mask": None, "nodata": 255,
     },
 }
 
-# Sentinel-2 scene classes to drop: no data, saturated, cloud shadow, cloud (medium/high), cirrus
+# Sentinel-2 pixel classes we throw away: no data, saturated, cloud shadow, medium and high
+# cloud, and thin cirrus cloud
 S2_BAD_CLASSES = [0, 1, 3, 8, 9, 10]
-# Landsat QA_PIXEL bits: fill, dilated cloud, cloud, cloud shadow
+# Landsat quality flags we throw away: fill, cloud edge, cloud and cloud shadow
 LANDSAT_BAD_BITS = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 4)
 
 _tokens = {}
 _token_lock = threading.Lock()
 
-# Dropped connections and temporary server errors are retried with back-off (search requests are
-# read-only POSTs, so retrying them is safe).
+# Dropped connections and temporary server errors are retried a few times, waiting a bit longer
+# each time. That's safe here because searches only read data.
 _session = requests.Session()
 _session.headers.update(HEADERS)
 _session.mount("https://", HTTPAdapter(max_retries=Retry(
@@ -98,6 +118,7 @@ _session.mount("https://", HTTPAdapter(max_retries=Retry(
 
 
 def _token(account, container):
+    """An access token for one storage container, reused until it's close to expiring."""
     key = (account, container)
     with _token_lock:
         cached = _tokens.get(key)
@@ -111,7 +132,7 @@ def _token(account, container):
 
 
 def _sign(href):
-    """Appends a read-only SAS token for the asset's storage account/container."""
+    """Adds an access token to a file's link so we're allowed to read it."""
     parsed = urlparse(href)
     if not parsed.netloc.endswith(".blob.core.windows.net"):
         return href
@@ -121,12 +142,13 @@ def _sign(href):
 
 
 def _utm_crs(lon, lat):
+    """The UTM zone for a point. UTM splits the world into 6 degree strips, each in metres."""
     zone = min(60, int((lon + 180) // 6) + 1)
     return CRS.from_epsg((32600 if lat >= 0 else 32700) + zone)
 
 
 def _search_pages(body):
-    """All matching items, following the API's "next page" links (up to MAX_SEARCH_ITEMS)."""
+    """Every scene matching the search, following "next page" links, up to MAX_SEARCH_ITEMS."""
     items, url, request = [], SEARCH_URL, body
     while url and len(items) < MAX_SEARCH_ITEMS:
         response = _session.post(url, json=request, timeout=60)
@@ -140,6 +162,11 @@ def _search_pages(body):
 
 
 def search(collection, bounds, start, end, max_cloud):
+    """Finds scenes of a collection over the area, clearest first.
+
+    bounds is [south, north, west, east]. Dates and the cloud limit only apply to collections
+    that have them.
+    """
     preset = COLLECTIONS[collection]
     south, north, west, east = bounds
     body = {"collections": [collection], "bbox": [west, south, east, north], "limit": 200}
@@ -151,7 +178,7 @@ def search(collection, bounds, start, end, max_cloud):
     if query:
         body["query"] = query
     if preset["cloud"]:
-        body["sortby"] = [{"field": "eo:cloud_cover", "direction": "asc"}]   # clearest first, across pages
+        body["sortby"] = [{"field": "eo:cloud_cover", "direction": "asc"}]   # clearest first, even across pages
     try:
         items = _search_pages(body)
     except requests.RequestException as e:
@@ -166,6 +193,11 @@ def search(collection, bounds, start, end, max_cloud):
 
 
 def _target_grid(bounds, native_res):
+    """The grid everything is read onto: the area in its UTM zone at the data's own cell size.
+
+    For big areas the cells are made bigger, so the grid is never more than MAX_SIDE cells
+    across. Returns (coordinate system, transform, width, height, cell size in metres).
+    """
     south, north, west, east = bounds
     crs = _utm_crs((west + east) / 2, (south + north) / 2)
     minx, miny, maxx, maxy = transform_bounds(CRS.from_epsg(4326), crs, west, south, east, north, densify_pts=21)
@@ -178,7 +210,12 @@ def _target_grid(bounds, native_res):
 
 
 def _read(href, grid, resampling, default_nodata=0):
-    """One asset warped onto the target grid, from the best-matching COG overview."""
+    """Reads one band file straight onto the target grid.
+
+    Cloud Optimised GeoTIFFs hold smaller copies of themselves ("overviews"). If the grid
+    doesn't need full detail, the smallest copy that's still detailed enough is read instead,
+    which is much faster. `default_nodata` is used if the file doesn't say what no data is.
+    """
     crs, transform, width, height, res = grid
     with rasterio.Env(**GDAL_ENV):
         with rasterio.open(href) as src:
@@ -197,6 +234,11 @@ def _read(href, grid, resampling, default_nodata=0):
 
 
 def _scale(collection, item, arr):
+    """Turns stored whole numbers into reflectance (the share of light reflected, 0 to 1).
+
+    Sentinel-2 scenes processed since 2022 (baseline 4.0 or later) store values with an
+    extra 1000 added, which has to come off first.
+    """
     props = item["properties"]
     if collection == "sentinel-2-l2a":
         offset = 1000 if float(props.get("s2:processing_baseline", "0") or 0) >= 4 else 0
@@ -207,6 +249,7 @@ def _scale(collection, item, arr):
 
 
 def _bad_pixels(collection, mask):
+    """True wherever the cloud mask band says the pixel is cloud, shadow or missing."""
     if collection == "sentinel-2-l2a":
         return np.isnan(mask) | np.isin(mask, S2_BAD_CLASSES)
     if collection == "landsat-c2-l2":
@@ -216,8 +259,11 @@ def _bad_pixels(collection, mask):
 
 
 def _read_assets(item, jobs, grid, nodata=0):
-    """Reads several assets of one item in parallel. Returns {name: array} or None on failure.
-    `nodata` is used for files that don't declare their own no-data value."""
+    """Reads several bands of one scene at the same time. Returns {band name: values}.
+
+    If any band can't be read, the scene is skipped and None is returned. `nodata` is used for
+    files that don't say what no data is.
+    """
     try:
         with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
             futures = {name: pool.submit(_read, _sign(item["assets"][asset]["href"]), grid, rs, nodata)
@@ -229,7 +275,7 @@ def _read_assets(item, jobs, grid, nodata=0):
 
 
 def _load_mosaic(collection, preset, items, grid, resampling):
-    """Elevation / surface-water tiles don't overlap: fill the grid tile by tile."""
+    """For elevation and surface water: the tiles sit side by side, so just fill the grid tile by tile."""
     crs, transform, width, height, res = grid
     names = list(preset["bands"])
     out = np.full((len(names), height, width), np.nan, dtype=np.float32)
@@ -251,13 +297,13 @@ def _load_mosaic(collection, preset, items, grid, resampling):
 
 
 def _load_median_composite(collection, preset, items, grid, resampling):
-    """Cloud-free composite of optical scenes.
+    """A cloud free picture made from several photos, used for small and medium areas.
 
-    Pass 1 reads only the blue band + cloud mask of every scene and picks, per
-    pixel, the scene whose blue reflectance is the median of the clear
-    observations: clouds the mask missed are too bright and their shadows too
-    dark, so both are rejected. Pass 2 reads the remaining bands only from the
-    scenes that were actually chosen.
+    It works in two passes. The first reads only the blue band and the cloud mask of every
+    photo. For each pixel, it picks the photo whose blue value is the middle one (the median)
+    of the clear views. Clouds the mask missed are too bright and their shadows too dark, so
+    picking the middle value skips both. The second pass reads the other bands, but only from
+    the photos that were actually picked somewhere.
     """
     crs, transform, width, height, res = grid
     names = list(preset["bands"])
@@ -275,7 +321,7 @@ def _load_median_composite(collection, preset, items, grid, resampling):
             blue[_bad_pixels(collection, arrays["_mask"])] = np.nan
         if np.isfinite(blue).any():
             scenes.append(item)
-            blues.append(blue.astype(np.float16))   # half precision: ample for reflectance, halves memory
+            blues.append(blue.astype(np.float16))   # half precision is plenty here and uses half the memory
     if not scenes:
         return None, []
 
@@ -308,24 +354,31 @@ def _load_median_composite(collection, preset, items, grid, resampling):
 
 
 def _tile_of(item):
+    """Which satellite tile (Sentinel-2) or path and row (Landsat) a photo belongs to."""
     props = item["properties"]
     return props.get("s2:mgrs_tile") or (props.get("landsat:wrs_path"), props.get("landsat:wrs_row"))
 
 
 def _load_coverage_mosaic(collection, preset, items, grid, resampling, out=None, inside=None):
-    """Large areas (whole countries): every satellite tile first gets its clearest photo,
-    then cloud gaps are filled from each tile's next-clearest photo, round by round.
-    Unlike the median composite this never runs out of photo budget on a few tiles.
-    Pass `out` to only fill the gaps left in an existing mosaic."""
+    """A mosaic for large areas like whole countries ("coverage mode").
+
+    First every satellite tile gets its clearest photo. Then any cloud gaps are filled from
+    each tile's next clearest photo, round by round. Unlike the median, this can't spend all
+    its photos on a few tiles and leave the rest of the country empty.
+
+    Pass `out` to only fill the gaps left in an existing mosaic, and `inside` to only care
+    about gaps inside the outline.
+    """
     crs, transform, width, height, res = grid
     names = list(preset["bands"])
     if out is not None:
-        # Only tiles whose footprint still overlaps a gap are worth reading.
+        # Only photos that cover part of a gap are worth reading.
         gaps = _gaps(out, inside)
         items = [it for it in items if _footprint_has_gap(it, gaps, grid)]
     by_tile = {}
-    for item in items:   # already clearest-first
+    for item in items:   # already sorted clearest first
         by_tile.setdefault(_tile_of(item), []).append(item)
+    # Round 1 is every tile's clearest photo, round 2 every tile's second clearest, and so on
     order = [scenes[r] for r in range(COVERAGE_ROUNDS) for scenes in by_tile.values() if len(scenes) > r]
     jobs = {n: (a, resampling) for n, a in preset["bands"].items()}
     if preset["mask"]:
@@ -337,14 +390,15 @@ def _load_coverage_mosaic(collection, preset, items, grid, resampling, out=None,
     print(f"STAC: {len(by_tile)} tiles, up to {len(order)} photos (coverage mode)")
 
     def read(item, window):
-        # Only the part of the grid this photo covers (~1/30 of a country), not the whole grid.
+        # Read only the part of the grid this photo covers (often a small slice of a country).
         r0, r1, c0, c1 = window
         sub_grid = (crs, transform * Affine.translation(c0, r0), c1 - c0, r1 - r0, res)
         return _read_assets(item, {k: v for k, v in jobs.items() if v[0] in item["assets"]}, sub_grid)
 
     queue = list(order)
     while queue and _gap_share(out, inside) >= 0.002:
-        # Next few photos that can still fill something (earlier ones may have filled their area).
+        # Take the next few photos that can still fill something. Earlier photos may already
+        # have filled the area a later one covers, so those are skipped.
         gaps = _gaps(out, inside)
         batch = []
         while queue and len(batch) < SCENE_WORKERS:
@@ -356,13 +410,13 @@ def _load_coverage_mosaic(collection, preset, items, grid, resampling, out=None,
             break
         with ThreadPoolExecutor(max_workers=len(batch)) as pool:
             results = list(pool.map(lambda job: read(*job), batch))
-        for (item, (r0, r1, c0, c1)), arrays in zip(batch, results):   # applied in clearest-first order
+        for (item, (r0, r1, c0, c1)), arrays in zip(batch, results):   # used in clearest first order
             if arrays is None or names[0] not in arrays:
                 continue
             valid = np.isfinite(arrays[names[0]])
             if "_mask" in arrays:
                 valid &= ~_bad_pixels(collection, arrays["_mask"])
-            target = out[:, r0:r1, c0:c1]          # a view: writes go straight into `out`
+            target = out[:, r0:r1, c0:c1]          # a view, so writing to it writes into `out`
             take = np.isnan(target[0]) & valid
             if not take.any():
                 continue
@@ -373,7 +427,8 @@ def _load_coverage_mosaic(collection, preset, items, grid, resampling, out=None,
 
 
 def _item_window(item, grid):
-    """(row0, row1, col0, col1) of the grid covered by a photo's bounding box, or None."""
+    """The rows and columns of the grid a photo covers, as (first row, end row, first column,
+    end column), or None if it misses the grid."""
     crs, transform, width, height, res = grid
     west, south, east, north = item["bbox"]
     minx, miny, maxx, maxy = transform_bounds(CRS.from_epsg(4326), crs, west, south, east, north)
@@ -383,7 +438,11 @@ def _item_window(item, grid):
 
 
 def _area_mask(area, grid):
-    """Pixels inside the area of interest (the connected outline); everything when there is none."""
+    """True for cells inside the connected outline, or everywhere if there's no outline.
+
+    Gaps only matter inside the outline, so we don't waste time filling clouds over a
+    neighbouring country.
+    """
     crs, transform, width, height, res = grid
     if area is None:
         return np.ones((height, width), dtype=bool)
@@ -392,27 +451,33 @@ def _area_mask(area, grid):
 
 
 def _gaps(out, inside):
-    """Still-empty pixels that matter (inside the area of interest)."""
+    """Cells inside the outline that are still empty."""
     return np.isnan(out[0]) & (inside if inside is not None else True)
 
 
 def _gap_share(out, inside):
+    """The share of the outline that's still empty, from 0 to 1."""
     total = inside.sum() if inside is not None else out[0].size
     return float(_gaps(out, inside).sum()) / max(int(total), 1)
 
 
 def _footprint_has_gap(item, gaps, grid):
-    """True if the photo's bounding box covers any still-empty pixel that matters."""
+    """True if the photo covers any cell that's still empty inside the outline."""
     window = _item_window(item, grid)
     return bool(window and gaps[window[0]:window[1], window[2]:window[3]].any())
 
 
 def _fill_gaps(collection, preset, bounds, start, end, max_cloud, out, grid, resampling, used, inside=None):
-    """Fills cloud gaps automatically: first cloudier photos from the same dates (their clouds
-    are masked out pixel by pixel), then photos from up to 6 months earlier. Returns notes."""
+    """Fills cloud gaps that are left, in two steps.
+
+    First it tries cloudier photos from the same dates. Their clouds are removed pixel by
+    pixel, so the clear parts are still useful. If there are still gaps, it looks at photos
+    from up to six months earlier. Returns the mosaic and a note about each step that helped.
+    """
     notes = []
     seen = {it["id"] for it in used}
-    passes = [(start, end, max(max_cloud, GAP_FILL_CLOUD), f"cloudier photos (up to {GAP_FILL_CLOUD}% cloud; clouds masked out)"),
+    passes = [(start, end, max(max_cloud, GAP_FILL_CLOUD),
+               f"cloudier photos (up to {GAP_FILL_CLOUD}% cloud, with the clouds removed)"),
               (start - timedelta(days=GAP_FILL_DAYS), end, max(max_cloud, GAP_FILL_CLOUD),
                f"photos from up to {GAP_FILL_DAYS // 30} months earlier")]
     for pass_start, pass_end, cloud, description in passes:
@@ -432,10 +497,13 @@ def _fill_gaps(collection, preset, bounds, start, end, max_cloud, out, grid, res
 
 
 def _per_tile(items, per_tile, cap):
-    """Least-cloudy scenes for *each* satellite tile/path, so an area spanning two
-    tiles isn't left with gaps because one tile hogged the scene budget."""
+    """The clearest few photos of each satellite tile, up to `cap` photos in all.
+
+    Without this, an area on the edge of two tiles could end up with every photo from one
+    tile and none from the other.
+    """
     counts, chosen = {}, []
-    for item in items:   # already sorted by cloud cover
+    for item in items:   # already sorted clearest first
         props = item["properties"]
         tile = props.get("s2:mgrs_tile") or (props.get("landsat:wrs_path"), props.get("landsat:wrs_row"))
         if counts.get(tile, 0) < per_tile:
@@ -447,7 +515,15 @@ def _per_tile(items, per_tile, cap):
 
 
 def load(collection, bounds, start, end, max_cloud, area=None):
-    """Returns (Raster, details, is_optical) — a cloud-free mosaic over `bounds` ([s, n, w, e])."""
+    """Loads a collection over an area. This is what the Satellite and Elevation Data node calls.
+
+    bounds is [south, north, west, east] and area the outline, if one is connected. Returns
+    the raster, notes for the node's details panel, and whether it's a satellite photo.
+
+    Elevation and surface water are simply pieced together tile by tile. Satellite photos are
+    combined to remove clouds: by median for areas covering up to four satellite tiles, or
+    tile by tile in coverage mode for bigger areas. Any gaps left are then filled.
+    """
     preset = COLLECTIONS[collection]
     items = [it for it in search(collection, bounds, start, end, max_cloud)
              if all(asset in it["assets"] for asset in preset["bands"].values())]
@@ -455,6 +531,7 @@ def load(collection, bounds, start, end, max_cloud, area=None):
     inside = _area_mask(area, grid)
     crs, transform, width, height, res = grid
     names = list(preset["bands"])
+    # Average the cells when shrinking a lot, otherwise blend smoothly
     resampling = Resampling.average if res > preset["res"] * 1.5 else Resampling.bilinear
 
     method = None
@@ -484,7 +561,7 @@ def load(collection, bounds, start, end, max_cloud, area=None):
     if preset["cloud"]:
         clouds = [it["properties"].get("eo:cloud_cover", 0) for it in used]
         details["Cloud cover"] = (", ".join(f"{c:.0f}%" for c in clouds) if len(clouds) <= 6
-                                  else f"{min(clouds):.0f}–{max(clouds):.0f}% per photo")
+                                  else f"{min(clouds):.0f}% to {max(clouds):.0f}% per photo")
     if method:
         details["Method"] = method
         if fill_notes:

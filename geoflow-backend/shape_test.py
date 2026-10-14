@@ -1,3 +1,8 @@
+"""Draws a country's shape as an SVG, for the Country Drawing node.
+
+The shapes come from Natural Earth's world countries file. It's downloaded once, unless the
+user has already uploaded their own copy through the node.
+"""
 import os
 import zipfile
 from functools import lru_cache
@@ -14,10 +19,10 @@ NE_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countrie
 
 
 def _ensure_countries_file():
-    """Downloads Natural Earth countries once if the user has not uploaded them."""
+    """Downloads the Natural Earth countries file if we don't have it yet."""
     if os.path.exists(NE_SHP):
         return
-    print("Natural Earth countries not found — downloading...")
+    print("Natural Earth countries not found, downloading...")
     response = requests.get(NE_URL, headers={"User-Agent": "GeoFlowApp/1.0"}, timeout=120)
     response.raise_for_status()
     os.makedirs(NE_DIR, exist_ok=True)
@@ -27,11 +32,13 @@ def _ensure_countries_file():
 
 @lru_cache(maxsize=1)
 def _load_countries(mtime):
-    # Keyed on mtime so an uploaded replacement is picked up.
+    """Reads the countries file. Passing its modified time means a newly uploaded copy is noticed."""
     return gpd.read_file(NE_SHP)
 
 
 def _match(df, location):
+    """The rows for a country. An exact name match is tried in several name columns first,
+    then any country whose sovereign state contains the text."""
     wanted = location.strip().lower()
     for col in ("ADMIN", "NAME", "NAME_LONG", "SOVEREIGNT"):
         if col in df.columns:
@@ -42,6 +49,7 @@ def _match(df, location):
 
 
 def plot_country(location, tag=""):
+    """Draws the country in purple on a transparent background. Returns the SVG's file name."""
     _ensure_countries_file()
     df = _match(_load_countries(os.path.getmtime(NE_SHP)), location)
     if df.empty:

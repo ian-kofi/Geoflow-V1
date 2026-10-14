@@ -4,8 +4,9 @@ import PlaceField, { placeContext } from './PlaceField.jsx';
 import { RECIPES } from '../workflow/recipes.js';
 
 /**
- * "Make a map" assistant: pick a place and what to see; GeoFlow builds and
- * runs the workflow. No GIS knowledge needed.
+ * The Make a map assistant. Pick a place, then what you want to see, and GeoFlow builds the
+ * workflow on the canvas and runs it. No GIS knowledge needed. The choices come from recipes.js.
+ * Double clicking a choice makes the map straight away.
  */
 export default function QuickMapDialog({ onClose, onCreate }) {
   const [text, setText] = useState('');
@@ -44,7 +45,7 @@ export default function QuickMapDialog({ onClose, onCreate }) {
             value={text}
             place={place}
             autoFocus
-            placeholder="Type a country, region, city or town, e.g. Akosombo"
+            placeholder="Type a country, region, city or town, for example Akosombo"
             onTextChange={(value) => {
               setText(value);
               setPlace(null);

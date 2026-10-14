@@ -1,3 +1,4 @@
+// Starts the app: loads the styles and puts <App /> into the page's #root element.
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '@xyflow/react/dist/style.css';

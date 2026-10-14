@@ -1,5 +1,7 @@
+/** Small helpers for downloading files and formatting values. */
 import { API_URL } from './config.js';
 
+/** The file name at the end of a link, or the fallback if there isn't one. */
 export function fileNameFromUrl(url, fallback = 'geoflow-output') {
   try {
     return decodeURIComponent(new URL(url).pathname.split('/').pop()) || fallback;
@@ -8,7 +10,11 @@ export function fileNameFromUrl(url, fallback = 'geoflow-output') {
   }
 }
 
-/** The `download` attribute is ignored cross-origin, so fetch the file as a blob first. */
+/**
+ * Downloads a file from a link. Browsers ignore the `download` attribute for files on another
+ * address (the backend), so the file is fetched first and saved from memory. If that fails,
+ * it's opened in a new tab instead.
+ */
 export async function downloadFile(url, filename = fileNameFromUrl(url)) {
   try {
     const response = await fetch(url);
@@ -24,14 +30,17 @@ export async function downloadFile(url, filename = fileNameFromUrl(url)) {
   }
 }
 
-/** A sensible map title from a node result, e.g. "Steepness · Akosombo". */
+/** A map title made from a result, like "Steepness · Akosombo". */
 export function autoTitle(result, fallback = 'Map') {
   const what = result?.legend?.label;
   const where = result?.place?.name ?? result?.location;
   return [what, where].filter(Boolean).join(' · ') || fallback;
 }
 
-/** Downloads a finished JPEG (title, picture, north arrow, scale bar, colour key) made by the backend. */
+/**
+ * Asks the backend to build a finished JPEG map (title, picture, north arrow, scale bar and
+ * legend) and downloads it.
+ */
 export async function exportJpeg({ imageUrl, title, subtitle = '', legend = null, bounds = null }) {
   const response = await fetch(`${API_URL}/export/jpeg`, {
     method: 'POST',
@@ -51,7 +60,7 @@ export async function exportJpeg({ imageUrl, title, subtitle = '', legend = null
   setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
-/** The JPEG export settings for a node's result (Final Map title wins if set). */
+/** What to send to exportJpeg for a node. A title typed into a Final Map node is used if there is one. */
 export function jpegOptions(node, def) {
   const r = node.data.result ?? {};
   return {
@@ -62,6 +71,7 @@ export function jpegOptions(node, def) {
   };
 }
 
+/** Saves data as a .json file (used to export a workflow). */
 export function downloadJson(data, filename) {
   const blobUrl = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   const a = Object.assign(document.createElement('a'), { href: blobUrl, download: filename });
@@ -69,11 +79,11 @@ export function downloadJson(data, filename) {
   setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
-/** [south, north, west, east] → readable string */
+/** An area given as [south, north, west, east], written for people, like "5.50°N to 5.70°N, 0.30°W to 0.10°W". */
 export function formatBounds(b) {
-  if (!Array.isArray(b) || b.length !== 4) return '—';
+  if (!Array.isArray(b) || b.length !== 4) return 'n/a';
   const [s, n, w, e] = b.map(Number);
   const lat = (v) => `${Math.abs(v).toFixed(2)}°${v >= 0 ? 'N' : 'S'}`;
   const lon = (v) => `${Math.abs(v).toFixed(2)}°${v >= 0 ? 'E' : 'W'}`;
-  return `${lat(s)} – ${lat(n)}, ${lon(w)} – ${lon(e)}`;
+  return `${lat(s)} to ${lat(n)}, ${lon(w)} to ${lon(e)}`;
 }

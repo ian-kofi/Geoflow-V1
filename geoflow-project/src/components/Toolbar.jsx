@@ -4,6 +4,7 @@ import Icon from './Icon.jsx';
 import { API_URL } from '../config.js';
 import { useWorkflow } from '../workflow/WorkflowContext.jsx';
 
+/** Whether the backend is reachable: 'checking', 'online' or 'offline'. Checked every 15 seconds. */
 function useBackendStatus() {
   const [status, setStatus] = useState('checking');
   useEffect(() => {
@@ -26,6 +27,11 @@ function useBackendStatus() {
   return status;
 }
 
+/**
+ * The bar at the top of the canvas: Run (or Stop while running), run everything again, a
+ * progress bar, collapse or expand all nodes, the backend status, light or dark mode, and
+ * show or hide the right hand panel.
+ */
 export default function Toolbar({ counts, inspectorOpen, onToggleInspector, theme, onToggleTheme }) {
   const { runAll, stop, running } = useWorkflow();
   const backend = useBackendStatus();
@@ -57,7 +63,7 @@ export default function Toolbar({ counts, inspectorOpen, onToggleInspector, them
         className="gf-icon-btn"
         onClick={() => runAll({ force: true })}
         disabled={running || !counts.total}
-        title="Re-run every node, ignoring cached results"
+        title="Run every node again, even ones that haven't changed"
       >
         <Icon name="refresh" size={15} />
       </button>

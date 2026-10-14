@@ -1,15 +1,20 @@
+/**
+ * The interactive map in the Map tab (or expanded over the canvas). It shows every result as a
+ * layer you can switch on and off, on top of a street map or satellite base map.
+ */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Map, { Layer, NavigationControl, ScaleControl, Source } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import Icon from './Icon.jsx';
 import { BASEMAP_KEY } from '../config.js';
 
-// Two hostnames for the same Esri service; MapLibre spreads tile requests across them.
+// Two addresses for the same Esri service, so the map can fetch tiles from both at once.
 const ESRI_IMAGERY = ['server', 'services'].map(
   (host) => `https://${host}.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
 );
 const ESRI_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 
+// Street map styles from CARTO, a light one and a dark one to match the app's theme
 const VECTOR_STYLES = {
   light: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -28,11 +33,13 @@ const BASEMAPS = [
   ['satellite', 'Satellite'],
 ];
 
+/** The base map style to use for the chosen base map and theme. */
 function basemapStyle(basemap, theme) {
   if (basemap === 'satellite') return IMAGERY_STYLE;
   return VECTOR_STYLES[theme] ?? VECTOR_STYLES.light;
 }
 
+/** The base map chosen last time, or the street map. */
 function savedBasemap() {
   try {
     const value = localStorage.getItem(BASEMAP_KEY);
@@ -42,20 +49,25 @@ function savedBasemap() {
   }
 }
 
+// Drawing order, bottom to top: photos, analysis results, outlines, map features, other shapes
 const KIND_ORDER = { imagery: 0, raster: 1, boundary: 2, layer: 3, vector: 4 };
 
+// Filters that pick out areas, lines or points in a GeoJSON layer
 const POLYGON = ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false];
 const LINE = ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false];
 const POINT = ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false];
 
-/** Layer ids that react to hover, per map layer. */
+/** The parts of a layer that show a tooltip when hovered. Photos and rasters don't. */
 function hoverIds(layer) {
   if (layer.kind === 'imagery' || layer.kind === 'raster') return [];
   if (layer.kind === 'vector') return [`${layer.id}-fill`, `${layer.id}-line`, `${layer.id}-circle`];
   return [`${layer.id}-${layer.layerType === 'buildings' || layer.kind === 'boundary' ? 'fill' : 'line'}`];
 }
 
-/** [south, north, west, east] list → [[west, south], [east, north]] for fitBounds. */
+/**
+ * The box around a list of areas given as [south, north, west, east], in the
+ * [[west, south], [east, north]] form the map's fitBounds expects.
+ */
 function toLngLatBounds(list) {
   const all = list.filter((b) => Array.isArray(b) && b.length === 4);
   if (!all.length) return null;
@@ -69,10 +81,12 @@ function toLngLatBounds(list) {
   ];
 }
 
+/** One layer on the map, drawn to suit its kind (photo, raster, outline, features or other shapes). */
 function MapLayer({ layer, visible }) {
   const visibility = visible ? 'visible' : 'none';
   if (layer.kind === 'imagery') {
-    // Live, zoomable imagery limited to the Satellite node's area (instead of the fixed JPEG mosaic).
+    // Live imagery you can zoom into, limited to the Satellite Photo node's area, instead of
+    // the fixed picture the node made.
     const [s, n, w, e] = layer.bounds;
     return (
       <Source
@@ -91,14 +105,14 @@ function MapLayer({ layer, visible }) {
   if (layer.kind === 'raster') {
     const [s, n, w, e] = layer.bounds;
     if (layer.tiles) {
-      // Rendered from the GeoTIFF per tile, so it stays sharp at every zoom level.
+      // Each tile is drawn from the GeoTIFF by the backend, so it stays sharp at every zoom level.
       return (
         <Source id={layer.id} type="raster" tiles={[layer.tiles]} tileSize={256} maxzoom={18} bounds={[w, s, e, n]}>
           <Layer id={`${layer.id}-raster`} type="raster" layout={{ visibility }} paint={{ 'raster-opacity': 0.85, 'raster-fade-duration': 0 }} />
         </Source>
       );
     }
-    // Older results without tiles: the single preview image, stretched over its corners (Web Mercator).
+    // Older results without tiles: the single preview picture, pinned at its four corners.
     return (
       <Source id={layer.id} type="image" url={layer.url} coordinates={[[w, n], [e, n], [e, s], [w, s]]}>
         <Layer id={`${layer.id}-raster`} type="raster" layout={{ visibility }} paint={{ 'raster-opacity': 0.85, 'raster-fade-duration': 0 }} />
@@ -162,6 +176,10 @@ function MapLayer({ layer, visible }) {
   );
 }
 
+/**
+ * The map. `layers` comes from collectMapLayers in Inspector.jsx. `focus` asks the map to zoom
+ * to an area (from a node's Show on map button). Without it the map fits all the layers.
+ */
 export default function MapPreview({ layers, theme = 'light', focus, expanded = false, onToggleExpand }) {
   const mapRef = useRef(null);
   const [hidden, setHidden] = useState({});
@@ -172,12 +190,12 @@ export default function MapPreview({ layers, theme = 'light', focus, expanded = 
     try {
       localStorage.setItem(BASEMAP_KEY, basemap);
     } catch {
-      /* storage unavailable — the choice just won't persist */
+      /* storage isn't available, so the choice just won't be remembered */
     }
   }, [basemap]);
 
   const ordered = useMemo(() => [...layers].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]), [layers]);
-  // Remount sources when the set changes so the stacking order (imagery at the bottom) is always correct.
+  // Rebuild the layers whenever the set changes, so the drawing order (photos at the bottom) stays right.
   const layersKey = ordered.map((l) => `${l.id}@${l.url}`).join('|');
   const bounds = useMemo(() => toLngLatBounds(ordered.map((l) => l.bounds)), [layersKey]);
   const focusBounds = useMemo(() => (focus ? toLngLatBounds([focus.bounds]) : null), [focus]);
@@ -191,7 +209,7 @@ export default function MapPreview({ layers, theme = 'light', focus, expanded = 
   }, []);
   const fit = useCallback((duration) => fitTo(bounds, duration), [fitTo, bounds]);
 
-  // A "View on map" request takes priority over fitting everything.
+  // Zooming to a requested area comes first. Otherwise fit everything.
   useEffect(() => {
     if (focusBounds) fitTo(focusBounds);
     else fit();
@@ -211,7 +229,7 @@ export default function MapPreview({ layers, theme = 'light', focus, expanded = 
 
   return (
     <div className="gf-map">
-      {/* Remount when the base style changes: swapping a style in place drops the data layers added on top of it. */}
+      {/* Rebuild the map when the base map changes. Changing the style in place would drop the layers on top of it. */}
       <Map
         key={`${basemap}-${theme}`}
         ref={mapRef}
@@ -275,7 +293,7 @@ export default function MapPreview({ layers, theme = 'light', focus, expanded = 
             <Icon name="fit" size={13} />
           </button>
         </div>
-        {ordered.length === 0 && <p className="gf-hint">Run Boundary, Satellite or Layer nodes to see them here.</p>}
+        {ordered.length === 0 && <p className="gf-hint">Run an Outline, Satellite Photo or Map Features node to see it here.</p>}
         {[...ordered].reverse().map((layer) => (
           <label key={layer.id} className="gf-map__legend-item">
             <input

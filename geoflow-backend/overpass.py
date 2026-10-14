@@ -1,10 +1,13 @@
-"""Minimal Overpass client.
+"""A small client for Overpass, the service that answers questions about OpenStreetMap data.
 
-Used instead of osmnx's feature download because osmnx retries 429/504
-responses indefinitely (a busy server can hang a node for 10+ minutes) and
-fetches geometry as separate node lists. `out geom` returns coordinates inline,
-and we race all public mirrors in parallel with hard timeouts: any single
-mirror is often overloaded (HTTP 504 / timeouts), but rarely all at once.
+We don't use osmnx's own download here for two reasons. When a server is busy, osmnx keeps
+retrying forever, so a node could sit there for ten minutes or more. It also downloads the
+points of each road separately, which is slow.
+
+Instead, the same query is sent to all the public Overpass servers at once and we take
+whichever answers first. Any one of them is often overloaded, but it's rare for all of them
+to be busy at the same time. If they are, we wait a little and try again. Answers are saved
+in cache/overpass so the same question is only asked once.
 """
 import os
 import json
@@ -25,27 +28,33 @@ OVERPASS_URLS = [u for u in [
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ] if u]
-# Overpass schedules queries by their declared time budget, so small areas ask
-# for less and get a slot sooner on a busy server.
+# Every query tells Overpass how long it might take. Busy servers run short queries sooner,
+# so small areas ask for less time.
 SMALL_AREA_DEG2 = 0.5
 SMALL_QUERY_TIMEOUT = 90
 LARGE_QUERY_TIMEOUT = 180
-RETRY_WAITS = (0, 10, 25)        # seconds before each round of parallel attempts
+RETRY_WAITS = (0, 10, 25)        # seconds to wait before each round of attempts
 CACHE_DIR = os.path.join("cache", "overpass")
-RETRYABLE_STATUS = (429, 502, 503, 504)
+RETRYABLE_STATUS = (429, 502, 503, 504)   # "too many requests" and "server busy" replies
 
 
 class OverpassBusy(RuntimeError):
-    pass
+    """Every Overpass server was busy, even after waiting and trying again."""
 
 
 def _selector(key, values):
+    """The Overpass filter for one tag, for example ["highway"~"^(primary|secondary)$"]."""
     if values is True:
         return f'["{key}"]'
     return f'["{key}"~"^({"|".join(values)})$"]'
 
 
 def build_query(tags, south, west, north, east, polygons=False):
+    """Writes the Overpass query for these tags inside a box. Returns (query, time limit in seconds).
+
+    Lines like roads come back as "ways". With polygons=True, multipolygon relations are asked
+    for as well, because large buildings are often mapped that way.
+    """
     bbox = f"({south:.6f},{west:.6f},{north:.6f},{east:.6f})"
     area = abs(north - south) * abs(east - west)
     timeout = SMALL_QUERY_TIMEOUT if area <= SMALL_AREA_DEG2 else LARGE_QUERY_TIMEOUT
@@ -55,12 +64,20 @@ def build_query(tags, south, west, north, east, polygons=False):
         parts.append(f"way{sel}{bbox};")
         if polygons:
             parts.append(f'relation{sel}["type"="multipolygon"]{bbox};')
-    # qt = unsorted output, which is cheaper for the server to produce.
+    # "out geom" puts the coordinates in the answer directly. "qt" means unsorted, which is
+    # less work for the server.
     return f"[out:json][timeout:{timeout}];({''.join(parts)});out geom qt;", timeout
 
 
 def _attempt(url, query, timeout):
-    """One request. Returns ('ok', data) | ('busy', reason) | ('heavy', reason) | ('error', reason)."""
+    """Sends the query to one server and says how it went, as (status, details).
+
+    The status is one of:
+        "ok"     it worked, and details is the data
+        "busy"   the server was overloaded or didn't answer, worth trying again
+        "heavy"  the server gave up because the query was too big for it
+        "error"  the query itself was rejected, so trying again won't help
+    """
     host = url.split("/")[2]
     started = time.time()
     try:
@@ -83,6 +100,7 @@ def _attempt(url, query, timeout):
 
 
 def _post(query, timeout):
+    """Asks every server at once and returns the first good answer (or a saved one)."""
     cache_path = os.path.join(CACHE_DIR, hashlib.sha1(query.encode()).hexdigest() + ".json")
     if os.path.exists(cache_path):
         with open(cache_path, encoding="utf-8") as f:
@@ -94,7 +112,8 @@ def _post(query, timeout):
             print(f"Overpass busy; retrying in {wait}s (round {round_no}/{len(RETRY_WAITS)})")
             time.sleep(wait)
         errors.clear()
-        # Not a `with` block: leaving it would wait for the slower mirrors to finish too.
+        # Not a `with` block on purpose: leaving one would wait for the slower servers to finish
+        # as well, when we only need the first answer.
         pool = ThreadPoolExecutor(max_workers=len(OVERPASS_URLS))
         try:
             futures = [pool.submit(_attempt, url, query, timeout) for url in OVERPASS_URLS]
@@ -111,6 +130,7 @@ def _post(query, timeout):
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
+        # If at least two servers said the query was too big, waiting won't help.
         if heavy and len(heavy) + len(errors) == len(OVERPASS_URLS) and len(heavy) >= 2:
             raise RuntimeError(f"Overpass could not finish the query for this area ({heavy[0]}). "
                                "Try a smaller area or a lighter layer such as highways.")
@@ -120,6 +140,7 @@ def _post(query, timeout):
 
 
 def _relation_polygon(element):
+    """Builds the shape of a multipolygon relation: its outer rings minus any holes."""
     outers = [LineString([(p["lon"], p["lat"]) for p in m["geometry"]])
               for m in element.get("members", [])
               if m.get("role") == "outer" and len(m.get("geometry") or []) >= 2]
@@ -135,7 +156,11 @@ def _relation_polygon(element):
 
 
 def fetch_features(tags, south, north, west, east, polygons=False, keep=()):
-    """Returns a GeoDataFrame (EPSG:4326) of ways/multipolygons matching `tags` in the bbox."""
+    """Everything matching `tags` inside the box, as a GeoDataFrame in latitude and longitude.
+
+    With polygons=True only closed shapes are kept (for buildings), otherwise lines.
+    `keep` lists the tags to copy into columns, such as "name" or "highway".
+    """
     data = _post(*build_query(tags, south, west, north, east, polygons))
     rows = []
     for el in data.get("elements", []):

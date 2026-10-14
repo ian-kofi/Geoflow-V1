@@ -1,7 +1,8 @@
-// Generated from matplotlib (the backend's renderer) so picker gradients match the output exactly.
+// The colour scales offered by the Colour Map node, with a few colour stops each for drawing them in the
+// picker. The stops were taken from matplotlib, which the backend draws with, so the picker matches the result.
 export const COLORMAP_GROUPS = [
   {
-    "label": "Elevation & terrain",
+    "label": "Elevation and terrain",
     "maps": [
       {
         "id": "terrain",
@@ -408,7 +409,7 @@ export const COLORMAP_GROUPS = [
     ]
   },
   {
-    "label": "Cyclic (e.g. aspect)",
+    "label": "Cyclic (for directions, like aspect)",
     "maps": [
       {
         "id": "twilight",

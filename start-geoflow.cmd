@@ -1,6 +1,6 @@
 @echo off
 rem Starts the GeoFlow backend and frontend in their own windows, then opens the app.
-rem Uses .exe/.cmd entry points directly, so PowerShell's script execution policy doesn't apply.
+rem It runs python.exe and npm.cmd directly, so PowerShell's script blocking rules don't get in the way.
 setlocal
 set "ROOT=%~dp0"
 set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"

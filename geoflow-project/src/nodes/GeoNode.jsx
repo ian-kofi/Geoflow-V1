@@ -1,3 +1,10 @@
+/**
+ * How every node looks on the canvas. All node types share this component; what differs
+ * (title, icon, settings, inputs) comes from their entry in registry.js.
+ *
+ * A node has a header (collapse button, icon, title, summary and status), a body with its
+ * settings and preview, and a footer with Run, Show on map, JPEG and Delete buttons.
+ */
 import { memo, useEffect, useState } from 'react';
 import { Handle, NodeResizer, Position, useReactFlow } from '@xyflow/react';
 import Icon from '../components/Icon.jsx';
@@ -18,6 +25,7 @@ const STATUS_LABEL = {
   skipped: 'Skipped',
 };
 
+/** Seconds since a node started running, updated ten times a second. */
 function Timer({ since }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -27,6 +35,7 @@ function Timer({ since }) {
   return <span className="gf-mono">{((now - since) / 1000).toFixed(1)}s</span>;
 }
 
+/** The result's picture, which opens full size in a new tab when clicked. It fades in once loaded. */
 function Preview({ type, result }) {
   const [loaded, setLoaded] = useState(false);
   const url = result?.outputImageUrl;
@@ -59,8 +68,8 @@ function GeoNode({ id, type, data, selected }) {
   const resizable = def.resizable && !collapsed;
   const mapBounds = result?.rasterBounds || result?.vectorBounds || (type === 'SatelliteNode' && result?.satelliteBounds);
 
-  // Not a setting: updates the node directly so it doesn't mark it as outdated. A resizable
-  // node remembers its height so collapsing shrinks it and expanding restores the size.
+  // Collapsing isn't a setting, so it updates the node directly instead of marking it out of
+  // date. A resizable node remembers its height, so expanding it again restores its size.
   const toggleCollapsed = () => {
     if (!def.resizable) return updateNodeData(id, { collapsed: !collapsed });
     updateNode(id, (node) =>
@@ -87,7 +96,7 @@ function GeoNode({ id, type, data, selected }) {
 
       {def.hasInput !== false &&
         (def.inputs ? (
-          // Named inputs, spaced down the left edge, each with its label outside the node.
+          // Named inputs, spaced evenly down the left edge, each labelled just outside the node.
           def.inputs.map((input, i) => (
             <Handle
               key={input.id}
@@ -126,7 +135,7 @@ function GeoNode({ id, type, data, selected }) {
         </div>
         <span
           className={`gf-status gf-status--${status}`}
-          // When collapsed the error box is hidden, so surface the message on hover.
+          // When collapsed the error box is hidden, so show the message on hover instead.
           title={collapsed && data.error ? `${STATUS_LABEL[status]}: ${data.error}` : STATUS_LABEL[status]}
         >
           <span className="gf-status__dot" />
@@ -141,7 +150,7 @@ function GeoNode({ id, type, data, selected }) {
 
             {type === 'LocationNode' && result?.location && status === 'done' && (
               <div className="gf-chip">
-                <Icon name="check" size={12} /> Sending “{result.location}” downstream
+                <Icon name="check" size={12} /> Sending “{result.location}” to the next nodes
               </div>
             )}
 
@@ -151,7 +160,7 @@ function GeoNode({ id, type, data, selected }) {
             {type === 'OutputImageNode' && !result?.outputImageUrl && (
               <div className="gf-empty">
                 <Icon name="image" size={22} />
-                Connect a node that produces an image, then run.
+                Connect a node that makes an image, then run.
               </div>
             )}
 
@@ -169,7 +178,7 @@ function GeoNode({ id, type, data, selected }) {
               className="gf-btn gf-btn--small nodrag"
               disabled={running}
               onClick={(e) => runNode(id, { force: e.shiftKey })}
-              title="Run this node and anything it depends on (Shift+click to force)"
+              title="Run this node and anything it depends on (Shift+click to run them all again)"
             >
               <Icon name="play" size={11} /> Run
             </button>
@@ -195,7 +204,7 @@ function GeoNode({ id, type, data, selected }) {
                 type="button"
                 className="gf-btn gf-btn--small nodrag"
                 onClick={() => exportJpeg(jpegOptions({ data }, def)).catch((err) => log('error', err.message))}
-                title="Download a finished JPEG with title, north arrow and colour key"
+                title="Download a finished JPEG with a title, north arrow and legend"
               >
                 <Icon name="download" size={12} /> JPEG
               </button>

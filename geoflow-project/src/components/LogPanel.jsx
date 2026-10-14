@@ -4,6 +4,10 @@ import { useLogs } from '../workflow/WorkflowContext.jsx';
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+/**
+ * The Console bar along the bottom of the canvas. Closed, it shows the latest message and a
+ * count of errors. Open, it lists every message from this session, scrolled to the newest.
+ */
 export default function LogPanel() {
   const { logs, clearLogs } = useLogs();
   const [open, setOpen] = useState(false);

@@ -1,9 +1,14 @@
-"""Vector algorithms: buffer, spatial filter / clip, dissolve."""
+"""Tools for shapes: buffer, spatial filter (including clip and erase) and dissolve.
+
+Each function takes and returns a GeoDataFrame. Distances and areas are worked out in metres,
+in the local UTM zone, and results are returned in latitude and longitude.
+"""
 import geopandas as gpd
 from shapely.ops import unary_union
 
 from .common import InputError
 
+# The Select by Location node's options and what each one does
 FILTER_MODES = {
     "intersects": "Keep features that touch the mask",
     "within": "Keep features completely inside the mask",
@@ -14,7 +19,7 @@ FILTER_MODES = {
 
 
 def _local_utm(gdf):
-    """A metric CRS for the data (needed for distances in metres)."""
+    """A coordinate system in metres that suits where the data is (its UTM zone), for distances."""
     try:
         return gdf.estimate_utm_crs()
     except Exception:
@@ -22,6 +27,10 @@ def _local_utm(gdf):
 
 
 def buffer(gdf, distance_m, dissolve=False):
+    """The area within distance_m metres of each feature. A negative distance shrinks shapes.
+
+    With dissolve, overlapping buffers are merged into one shape.
+    """
     if distance_m == 0:
         raise InputError("Buffer distance can't be 0.")
     metric = gdf.to_crs(_local_utm(gdf))
@@ -37,6 +46,10 @@ def buffer(gdf, distance_m, dissolve=False):
 
 
 def spatial_filter(data, mask, mode):
+    """Keeps, cuts or removes features of `data` depending on where they are compared with `mask`.
+
+    The modes are listed in FILTER_MODES.
+    """
     mask = mask.to_crs(data.crs)
     mask_shape = unary_union(mask.geometry.make_valid())
     if mask_shape.is_empty:
@@ -59,6 +72,8 @@ def spatial_filter(data, mask, mode):
 
 
 def dissolve(gdf, field=""):
+    """Merges shapes together: into one shape, or one per value of `field` (for example districts
+    into regions). Shapes get an area_km2 column."""
     if field:
         if field not in gdf.columns:
             columns = ", ".join(c for c in gdf.columns if c != gdf.geometry.name)

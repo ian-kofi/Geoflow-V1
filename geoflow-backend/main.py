@@ -1,3 +1,26 @@
+"""The GeoFlow web server.
+
+The frontend runs a workflow by sending each node to POST /upload, one request per node, in an
+order that respects the connections between them. Each request carries the node's type, its
+settings and the outputs of the nodes connected to it. This file works out which node it is,
+calls the code that does the actual work and sends back what the node produced: file paths,
+links to preview images and map tiles, legends and so on. The frontend then passes those
+results on to the next nodes.
+
+The older node types (Outline, Satellite Photo, Map Features, Combine Layers and a few others)
+are handled directly in _run_node below. All the spatial analysis nodes (slope, HAND, NDVI,
+reclassify and the rest) live in the spatial package and are looked up in spatial.HANDLERS.
+
+Other endpoints:
+    /geocode        place search for the Place node's dropdown
+    /export/jpeg    turns a result into a finished map with title, scale bar and legend
+    /raster-tiles   map tiles drawn on demand from an analysis result
+    /tiles          satellite tiles cut to an outline
+    /outputs and /files serve the images and data files the nodes create
+
+Files are written to four folders next to this file: outputs (preview images), files (GeoJSON,
+GeoTIFFs and styles), uploads (files people load in) and cache (downloads kept for reuse).
+"""
 import os
 import json
 import re
@@ -10,7 +33,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote
 
 import matplotlib
-matplotlib.use("Agg")  # headless backend; must be set before any plotting module is imported
+matplotlib.use("Agg")  # draw without a screen; this has to happen before anything imports pyplot
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,34 +54,41 @@ from exporter import export_jpeg
 import spatial
 
 def _env_number(name, default=0):
+    """Reads a number from an environment variable, falling back to the default if it isn't one."""
     try:
         return float(os.environ.get(name, default))
     except ValueError:
         return default
 
 
-# Public address of this server. Render provides RENDER_EXTERNAL_URL (e.g. https://geoflow.onrender.com).
+# The address people use to reach this server. Links to images and tiles are built from it.
+# Render sets RENDER_EXTERNAL_URL for us (for example https://geoflow.onrender.com).
 BASE_URL = (os.environ.get("GEOFLOW_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
             or "http://localhost:8000").rstrip("/")
-# Built frontend (geoflow-project/dist) to serve from this server, for a single-URL deployment.
+# If set, the built frontend in this folder is served too, so the whole app lives at one address.
 STATIC_DIR = os.environ.get("GEOFLOW_STATIC_DIR")
-# Limits for a public deployment; 0 = off (the default when running locally).
+# Limits for a public server. They are all 0 (switched off) when you run GeoFlow on your own computer.
 MAX_UPLOAD_MB = _env_number("GEOFLOW_MAX_UPLOAD_MB")
 MAX_JOBS = int(_env_number("GEOFLOW_MAX_JOBS"))
 RETENTION_HOURS = _env_number("GEOFLOW_RETENTION_HOURS")
 DATA_FOLDERS = ("outputs", "files", "uploads", "cache")
 
+# Form fields that are node settings rather than uploaded files.
 PARAM_KEYS = {"nodeType", "nodeId", "locations", "parentOutputs", "satelliteZoom", "layerType",
               "boundarySource", "boundaryAdminLevel", "alpha", "dpi", "clipToBoundary"} | spatial.PARAM_KEYS
 RASTER_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
-# StaticFiles refuses to mount a missing directory, so create them up front.
+# StaticFiles won't mount a folder that doesn't exist yet, so make sure they all do.
 for folder in ("outputs", "files", "uploads"):
     os.makedirs(folder, exist_ok=True)
 mimetypes.add_type("application/geo+json", ".geojson")
 
+
 def _delete_old_files(max_age_s):
-    """Removes results, uploads and caches older than max_age_s (public deployments only)."""
+    """Deletes results, uploads and cached downloads older than max_age_s seconds.
+
+    Only used on a public server, so its disk doesn't slowly fill up.
+    """
     cutoff = time.time() - max_age_s
     removed = 0
     for folder in DATA_FOLDERS:
@@ -76,6 +106,7 @@ def _delete_old_files(max_age_s):
 
 
 async def _sweep_old_files():
+    """Runs the clean up every half hour for as long as the server is up."""
     while True:
         await run_in_threadpool(_delete_old_files, RETENTION_HOURS * 3600)
         await asyncio.sleep(1800)
@@ -83,6 +114,7 @@ async def _sweep_old_files():
 
 @asynccontextmanager
 async def lifespan(_app):
+    """Starts the clean up task when the server starts (if a retention time is set) and stops it on exit."""
     sweeper = asyncio.create_task(_sweep_old_files()) if RETENTION_HOURS > 0 else None
     yield
     if sweeper:
@@ -90,28 +122,30 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="GeoFlow", lifespan=lifespan)
-# Heavy node runs allowed at the same time (others wait their turn); None = no limit.
+# How many nodes may run at once. Anything beyond that waits its turn. None means no limit.
 JOB_SLOTS = asyncio.Semaphore(MAX_JOBS) if MAX_JOBS > 0 else None
 
+# The frontend's development server runs on a different port, so the browser needs permission to call us.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
-                   # Extra origins, comma-separated (e.g. if the frontend runs on another port)
+                   # Any extra addresses, separated by commas (for example if Vite picks another port)
                    *[o.strip() for o in os.environ.get("GEOFLOW_CORS_ORIGINS", "").split(",") if o.strip()]],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
-# GeoJSON compresses ~5-10x; images are already compressed so only /files is gzipped.
+# GeoJSON shrinks a lot when compressed. Images are already compressed, so only /files is gzipped.
 app.mount("/files", GZipMiddleware(StaticFiles(directory="files"), minimum_size=1024), name="files")
 
 
 class NodeError(Exception):
-    """A problem with the node's inputs, reported to the user as-is."""
+    """Something wrong with a node's inputs or settings. The message is shown to the user as it is."""
 
 
 def _parse_json(value, default):
+    """Parses a JSON form field, returning the default if it's missing or broken."""
     try:
         return json.loads(value) if value else default
     except (TypeError, json.JSONDecodeError):
@@ -119,6 +153,7 @@ def _parse_json(value, default):
 
 
 def _int(value, default, lo, hi):
+    """Turns a form value into a whole number kept between lo and hi."""
     try:
         return max(lo, min(hi, int(float(value))))
     except (TypeError, ValueError):
@@ -126,13 +161,19 @@ def _int(value, default, lo, hi):
 
 
 def _bool(value, default):
+    """Reads a true or false setting from a form value such as "true", "1" or "on"."""
     if value is None or value == "":
         return default
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _clean_place(place):
-    """Validates a place object sent back by the client (from /geocode) before it is used."""
+    """Checks a place sent back by the browser before we use it.
+
+    The Place node stores the result the user picked from /geocode and sends it with every
+    request. Since it comes from the browser we can't trust it, so this keeps only the fields
+    we expect, in the types we expect. Returns None if anything important is missing.
+    """
     if not isinstance(place, dict):
         return None
     try:
@@ -161,19 +202,28 @@ def _clean_place(place):
 
 
 def _safe_tag(node_id, node_type):
-    """Per-node filename suffix; drops the 'satellite_' style prefix so names don't repeat it."""
+    """Makes a short, filename safe tag from a node's id, used to name the files it creates.
+
+    Node ids look like "slope_ab12c". The type is already part of each file name, so the
+    "slope_" part is dropped to avoid names like slope_slope_ab12c.tif.
+    """
     tag = re.sub(r"[^A-Za-z0-9_-]", "", str(node_id or ""))[:40]
     prefix = str(node_type or "").replace("Node", "").lower() + "_"
     return tag[len(prefix):] if tag.lower().startswith(prefix) and len(tag) > len(prefix) else tag
 
 
 def _safe_relpath(name):
+    """Cleans a relative path from the browser, removing any "..", so it can't point outside our folders."""
     parts = [p for p in str(name or "").replace("\\", "/").split("/") if p not in ("", ".", "..")]
     return os.path.join(*parts) if parts else None
 
 
 def _within(path, folder):
-    """Paths come back from the client, so only accept ones inside our data folders."""
+    """Returns the path only if it exists and is inside the given folder, otherwise None.
+
+    Earlier results come back from the browser with their file paths, so every path is checked
+    with this before we open it. That stops anyone asking the server to read other files.
+    """
     if not path:
         return None
     full = os.path.abspath(path)
@@ -182,15 +232,18 @@ def _within(path, folder):
 
 
 def _versioned_url(folder, path):
+    """The public link to a file, with its modified time added so browsers fetch new versions."""
     rel = os.path.relpath(path, folder).replace(os.sep, "/")
     return f"{BASE_URL}/{folder}/{rel}?v={os.stat(path).st_mtime_ns}"
 
 
 def _output_url(filename):
+    """The public link to a file in the outputs folder."""
     return _versioned_url("outputs", os.path.join("outputs", filename))
 
 
 def _url_to_output_path(url):
+    """Turns a link to an image in outputs back into its local path (None if it isn't one of ours)."""
     if not url or "/outputs/" not in url:
         return None
     filename = os.path.basename(unquote(url.split("/outputs/")[-1].split("?")[0]))
@@ -198,6 +251,7 @@ def _url_to_output_path(url):
 
 
 def _save_upload(upload, save_path):
+    """Writes an uploaded file to disk, in 1 MB pieces so big files don't fill the memory."""
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     upload.file.seek(0)
     with open(save_path, "wb") as f:
@@ -206,12 +260,17 @@ def _save_upload(upload, save_path):
 
 @app.get("/health")
 async def health():
+    """Lets the frontend (and the hosting service) check that the server is up."""
     return {"status": "ok"}
 
 
 @app.post("/export/jpeg")
 async def export_map_jpeg(request: Request):
-    """A finished JPEG of a result: title, picture, north arrow, scale bar (when known) and colour key."""
+    """Turns a result into a finished JPEG map with a title, north arrow, scale bar and legend.
+
+    The browser sends the link to the result's image plus its title, legend and extent. The
+    scale bar is only drawn when the extent is known.
+    """
     body = await request.json()
     image_path = _url_to_output_path(body.get("imageUrl"))
     if not image_path:
@@ -228,7 +287,7 @@ async def export_map_jpeg(request: Request):
 
 @app.get("/geocode")
 def geocode(q: str = ""):
-    """Candidate places for the Location node's dropdown."""
+    """Searches for places matching the text typed into a Place node, for its dropdown list."""
     try:
         return {"results": search_places(q[:200])}
     except Exception as e:
@@ -237,7 +296,11 @@ def geocode(q: str = ""):
 
 @app.get("/raster-tiles/{z}/{x}/{y}.png")
 def raster_tile(z: int, x: int, y: int, style: str):
-    """Map tile of a raster result, rendered on demand from its GeoTIFF + saved style."""
+    """Draws one map tile of an analysis result when the map asks for it.
+
+    `style` points to the JSON file saved alongside the result, which says which GeoTIFF to
+    read and how to colour it. Drawing tiles on demand keeps results sharp at every zoom level.
+    """
     rel = _safe_relpath(style)
     path = _within(os.path.join("files", rel), "files") if rel else None
     if not path or not path.endswith(".json") or not (0 <= z <= 22 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
@@ -248,8 +311,12 @@ def raster_tile(z: int, x: int, y: int, style: str):
 
 @app.get("/tiles/{z}/{x}/{y}.png")
 def boundary_tile(z: int, x: int, y: int, boundary: str):
-    """Esri imagery tile masked to a boundary file, for zoomable clipped imagery on the map.
-    Sync on purpose: FastAPI runs it in the thread pool, so slow tile downloads don't block."""
+    """One satellite imagery tile with everything outside an outline made transparent.
+
+    This is how the map shows a zoomable satellite photo cut to a place's shape. It's a normal
+    (not async) function on purpose: FastAPI then runs it in a background thread, so a slow
+    download from the imagery server doesn't hold up other requests.
+    """
     rel = _safe_relpath(boundary)
     path = _within(os.path.join("files", rel), "files") if rel else None
     if not path or not (0 <= z <= 19 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
@@ -260,6 +327,11 @@ def boundary_tile(z: int, x: int, y: int, boundary: str):
 
 @app.post("/upload")
 async def upload_files(request: Request):
+    """Runs one node of a workflow. The frontend calls this once for every node it runs.
+
+    On a public server this first turns away requests that are too large and makes the node
+    wait if too many others are already running. The work itself happens in _run_node.
+    """
     if MAX_UPLOAD_MB > 0:
         try:
             size = int(request.headers.get("content-length") or 0)
@@ -275,6 +347,19 @@ async def upload_files(request: Request):
 
 
 async def _run_node(request: Request):
+    """Does the work for one node and returns its results.
+
+    The request is a form with:
+        nodeType, nodeId    which node this is
+        parentOutputs       JSON list of the results of the nodes connected to it. If a parent
+                            is plugged into a named input (like "mask"), its result has an
+                            "_input" key saying which one.
+        locations           the place typed into a Place node, if this is one
+        anything else       the node's settings, or files the user chose to upload
+
+    The reply is the same dictionary shape for every node type, with None for anything that
+    doesn't apply. Analysis nodes add their own fields through spatial_outputs.
+    """
     started = time.perf_counter()
     form = await request.form()
 
@@ -299,7 +384,7 @@ async def _run_node(request: Request):
     satellite_tiles_url = None
     spatial_outputs = {}
 
-    # Location: this node's own value first, then the first parent that has one
+    # The place name: this node's own value if it has one, otherwise the first parent that does
     if "locations" in form:
         locations_data = _parse_json(form.get("locations"), None)
         if isinstance(locations_data, dict):
@@ -311,12 +396,14 @@ async def _run_node(request: Request):
     if not location:
         location = next((p["location"] for p in parent_outputs if p.get("location")), None)
     location = str(location).strip() or None if location else None
-    # The exact place picked in the Location dropdown, if any (disambiguates names like "Tema")
+    # The exact place picked from the Place node's dropdown, if any. Names like "Tema" exist in
+    # several countries, so this tells us which one the user meant.
     place = _clean_place(next((p["place"] for p in parent_outputs if isinstance(p.get("place"), dict)), None))
     if place and not location:
         location = place["name"]
 
-    # Uploaded files
+    # Uploaded files. Files whose field name starts with "geo_" are a shapefile folder for the
+    # Country Drawing node and go into files/. Anything else belongs to a Your Own File node.
     upload_dir = os.path.join("uploads", tag) if tag else "uploads"
     saved_uploads = []
     for key in form.keys():
@@ -335,8 +422,9 @@ async def _run_node(request: Request):
                 if not name:
                     continue
                 if not saved_uploads and tag and os.path.isdir(upload_dir):
-                    # A new selection replaces this node's previous upload (kept per node so it
-                    # can be reused after a page reload, when the browser no longer has the file).
+                    # Choosing new files replaces this node's old ones. Uploads are kept in a
+                    # folder per node so they can be used again after the page is reloaded,
+                    # when the browser no longer has the original file.
                     await run_in_threadpool(shutil.rmtree, upload_dir, True)
                 save_path = os.path.join(upload_dir, name)
                 saved_uploads.append(save_path)
@@ -345,20 +433,22 @@ async def _run_node(request: Request):
             received_files += 1
 
     def first_parent(key):
+        """The value of `key` from the first connected node that has it."""
         return next((p[key] for p in parent_outputs if p.get(key)), None)
 
     def require_location():
         if not location:
-            raise NodeError(f"{node_type} needs a location — connect a Location node upstream.")
+            raise NodeError(f"{node_type} needs a place. Connect a Place node before it.")
 
     try:
+        # Outline: the border of the chosen place, saved as GeoJSON, plus a preview image
         if node_type == "BoundaryNode":
             require_location()
             boundary_source = form.get("boundarySource") or "geoboundaries"
             boundary_admin_level = _int(form.get("boundaryAdminLevel"), 0, 0, 5)
             if place and not place["isCountry"] and boundary_source != "city":
-                # Country admin datasets don't apply to a picked city/district; use its own outline.
-                print(f"'{place['name']}' is a {place['kind']}, not a country — using its OpenStreetMap boundary")
+                # Country border datasets don't work for a town or district, so use its own outline.
+                print(f"'{place['name']}' is a {place['kind']}, not a country, so using its OpenStreetMap boundary")
                 boundary_source = "city"
             country = place["name"] if place and place["isCountry"] else location
             if boundary_source == "geoboundaries":
@@ -372,6 +462,7 @@ async def _run_node(request: Request):
             output_filename, boundary_shp_path, boundary_bounds = result
             output_url = _output_url(output_filename)
 
+        # Satellite Photo: Esri imagery stitched into one picture, cut to the outline if one is connected
         elif node_type == "SatelliteNode":
             satellite_zoom = _int(form.get("satelliteZoom"), 7, 0, 19)
             sat_bounds = first_parent("boundaryBounds") or (place and place["bbox"])
@@ -389,6 +480,7 @@ async def _run_node(request: Request):
                 satellite_tiles_url = f"{BASE_URL}/tiles/{{z}}/{{x}}/{{y}}.png?boundary={boundary_rel}"
             output_url = _output_url(output_filename)
 
+        # Map Features: roads, rivers, railways or buildings from OpenStreetMap
         elif node_type == "LayerNode":
             layer_type = form.get("layerType") or "roads"
             layer_bounds = first_parent("boundaryBounds") or (place and place["bbox"])
@@ -399,14 +491,17 @@ async def _run_node(request: Request):
                 fetch_layer, location or "selected area", layer_type, layer_bounds, clip_path, tag)
             output_url = _output_url(output_filename)
 
+        # Country Drawing: a simple SVG outline of a country from Natural Earth
         elif node_type == "GeoFileNode":
             require_location()
-            # Natural Earth is country-level, so a picked city plots its country.
+            # Natural Earth only has countries, so if a town was picked we draw its country.
             country = (place["country"] or place["name"]) if place else location
             output_filename = await run_in_threadpool(plot_country, country, tag)
             svg_path = os.path.join("outputs", output_filename)
             output_url = _output_url(output_filename)
 
+        # Drawing to Picture: turns the SVG from Country Drawing into a PNG. If it's given a
+        # picture that's already a PNG or JPEG, it just passes it along.
         elif node_type == "RasterizerNode":
             dpi_selection = _int(form.get("dpi"), 300, 36, 1200)
             for parent_output in parent_outputs:
@@ -428,20 +523,23 @@ async def _run_node(request: Request):
                 output_filename = await run_in_threadpool(svgToRaster, svg_path, dpi_selection, tag)
                 output_url = _output_url(output_filename)
             elif not output_url:
-                raise NodeError("Nothing to rasterize — connect a Country Shape (SVG) node.")
+                raise NodeError("Nothing to turn into a picture. Connect a Country Drawing node.")
 
+        # Final Map: shows the picture of whatever is connected to it. Nothing new is made here.
         elif node_type == "OutputImageNode":
             source = next((p for p in parent_outputs if p.get("outputImageUrl")), None)
             if not source:
-                raise NodeError("No image to display — connect a node that produces an image.")
+                raise NodeError("No image to display. Connect a node that makes an image.")
             output_url = source["outputImageUrl"]
             if source.get("legend"):
-                spatial_outputs["legend"] = source["legend"]   # so the output shows its colour key
-            # Exact extent of the picture (raster previews and satellite photos), for the JPEG scale bar.
+                spatial_outputs["legend"] = source["legend"]   # so the final map shows the same legend
+            # Where the picture sits on the Earth, so the JPEG export can draw a scale bar.
             image_bounds = source.get("rasterBounds") or source.get("satelliteBounds") or source.get("imageBounds")
             if image_bounds:
                 spatial_outputs["imageBounds"] = image_bounds
 
+        # Combine Layers: draws the outline and any Map Features on top of a background picture.
+        # The background is a satellite photo if one is connected, otherwise any analysis result.
         elif node_type == "CompositeNode":
             alpha = _int(float(form.get("alpha") or 0.6) * 100, 60, 0, 100) / 100
             base_geojson_path = None
@@ -459,8 +557,9 @@ async def _run_node(request: Request):
                 if is_satellite and background_image_path is None:
                     background_image_path = _url_to_output_path(image_url)
                     sat_bounds = parent_output.get("satelliteBounds")
-                # Any analysis result (flood classes, slope, NDVI…) can be the background too: its
-                # preview is a Web Mercator image with exact bounds, just like a satellite photo.
+                # An analysis result (flood classes, slope, NDVI and so on) works as a background
+                # too, because its preview is a Web Mercator picture with known edges, just like
+                # a satellite photo.
                 elif parent_output.get("rasterBounds") and raster_background is None:
                     raster_background = parent_output
 
@@ -473,7 +572,7 @@ async def _run_node(request: Request):
                 background_image_path = _url_to_output_path(raster_background.get("outputImageUrl"))
                 sat_bounds = raster_background["rasterBounds"]
                 if raster_background.get("legend"):
-                    spatial_outputs["legend"] = raster_background["legend"]   # keep its colour key
+                    spatial_outputs["legend"] = raster_background["legend"]   # keep its legend
             if not base_geojson_path:
                 raise NodeError("Combine Layers needs an Outline connected.")
             output_filename = await run_in_threadpool(
@@ -481,6 +580,7 @@ async def _run_node(request: Request):
                 background_image_path, sat_bounds, tag)
             output_url = _output_url(output_filename)
 
+        # Every analysis node (slope, HAND, NDVI, reclassify and so on) is handled by the spatial package
         elif node_type in spatial.HANDLERS:
             context = spatial.Context(
                 node_type=node_type, params={k: form.get(k) for k in spatial.PARAM_KEYS if k in form},
@@ -489,7 +589,8 @@ async def _run_node(request: Request):
             spatial_outputs = await run_in_threadpool(spatial.HANDLERS[node_type], context)
             output_filename = spatial_outputs.pop("outputImage", None)
             output_url = _output_url(output_filename) if output_filename else None
-            # Polygon results double as boundaries for Satellite, OSM Layer, STAC and Composite nodes.
+            # A result made of polygons can be used as an outline by later nodes (Satellite Photo,
+            # Map Features, Satellite and Elevation Data, Combine Layers), so it's passed on as one.
             boundary_shp_path = spatial_outputs.pop("boundaryShpPath", None)
             boundary_bounds = spatial_outputs.pop("boundaryBounds", None)
             for key, url_key in (("rasterPath", "rasterUrl"), ("vectorPath", "vectorGeoJsonUrl"),
@@ -498,11 +599,13 @@ async def _run_node(request: Request):
                     spatial_outputs[url_key] = _versioned_url("files", spatial_outputs[key])
             style_path = spatial_outputs.pop("stylePath", None)
             if style_path:
-                # Zoomable map tiles rendered from the GeoTIFF (sharp at every zoom level).
+                # A link the map uses to fetch tiles drawn from the GeoTIFF, so it stays sharp when zoomed in.
                 rel = quote(os.path.relpath(style_path, "files").replace(os.sep, "/"))
                 spatial_outputs["rasterTilesUrl"] = (f"{BASE_URL}/raster-tiles/{{z}}/{{x}}/{{y}}.png"
                                                      f"?style={rel}&v={os.stat(style_path).st_mtime_ns}")
 
+    # Problems the user can fix get a 400 with a readable message. Anything unexpected is a 500,
+    # and the full error goes to the server log.
     except (NodeError, spatial.InputError) as e:
         return JSONResponse(status_code=400, content={"status": "error", "nodeId": node_id, "detail": str(e)})
     except Exception as e:
@@ -510,7 +613,7 @@ async def _run_node(request: Request):
         return JSONResponse(status_code=500, content={"status": "error", "nodeId": node_id, "detail": str(e)})
 
     elapsed = round(time.perf_counter() - started, 2)
-    print(f"Node {node_id} ({node_type}) done in {elapsed}s → {output_url}")
+    print(f"Node {node_id} ({node_type}) done in {elapsed}s: {output_url}")
 
     return {
         "status": "ok",
@@ -518,7 +621,7 @@ async def _run_node(request: Request):
         "elapsed": elapsed,
         "received": received_files,
         "location": location,
-        "place": place,      # passed along so nodes further downstream keep the exact place
+        "place": place,      # passed along so every later node knows exactly which place was picked
         "svgPath": svg_path,
         "outputImageUrl": output_url,
         "layerFile": output_filename if node_type == "LayerNode" else None,
@@ -527,16 +630,17 @@ async def _run_node(request: Request):
         "layerType": layer_type,
         "boundaryBounds": boundary_bounds,
         "satelliteBounds": actual_sat_bounds if node_type == "SatelliteNode" else None,
-        # Zoomable imagery tiles masked to the boundary (None when the image isn't clipped)
+        # Link to zoomable satellite tiles cut to the outline (None when the photo isn't cut)
         "satelliteTilesUrl": satellite_tiles_url,
         "boundaryGeoJsonUrl": _versioned_url("files", boundary_shp_path) if boundary_shp_path else None,
         "layerGeoJsonUrl": _versioned_url("files", layer_geojson_path) if layer_geojson_path else None,
-        # Spatial analysis nodes: rasterPath/rasterUrl, vectorPath/vectorGeoJsonUrl, legend, stats, details…
+        # Extra fields from analysis nodes, such as rasterPath and rasterUrl, vectorPath and
+        # vectorGeoJsonUrl, legend, stats and details
         **spatial_outputs,
     }
 
 
-# Single-URL deployment: serve the built frontend for every path the API doesn't handle.
-# Mounted last, so the API routes above always take priority.
+# When the server also hosts the frontend (as on Render), any address that isn't one of the API
+# routes above gets the app's files. This is added last so the API routes are always checked first.
 if STATIC_DIR and os.path.isdir(STATIC_DIR):
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="app")

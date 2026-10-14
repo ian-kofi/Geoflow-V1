@@ -1,3 +1,14 @@
+"""Outlines (borders) for the Outline node.
+
+There are three sources:
+    geoBoundaries   official country, region and district borders (the default for countries)
+    GADM            a second set of country borders, used if someone prefers it
+    OpenStreetMap   the outline of a town, city, district or national park
+
+Every function returns the same three things: the name of a preview picture in outputs/, the
+path of the GeoJSON file with the outline, and its extent as [south, north, west, east].
+Downloads are saved in files/ and reused next time.
+"""
 import os
 import re
 import json
@@ -17,11 +28,13 @@ from plotting import (BOUNDARY_EDGE, BOUNDARY_FILL, atomic_write_bytes, is_fresh
 HEADERS = {"User-Agent": "GeoFlowApp/1.0"}
 
 
+# The list of every country geoBoundaries has, used to turn a country name into its code.
 COUNTRY_INDEX_URL = "https://www.geoboundaries.org/api/current/gbOpen/ALL/ADM0/"
 COUNTRY_INDEX_PATH = os.path.join("files", "_geoboundaries_countries.json")
-COUNTRY_INDEX_MAX_AGE = 30 * 24 * 3600
+COUNTRY_INDEX_MAX_AGE = 30 * 24 * 3600   # download it again after 30 days
 
-# geoBoundaries uses formal UN names; map common short names to ISO3.
+# geoBoundaries uses the formal UN names, so common everyday names are looked up here first
+# and turned into the three letter ISO code.
 COUNTRY_ALIASES = {
     "usa": "USA", "us": "USA", "united states": "USA", "america": "USA",
     "uk": "GBR", "britain": "GBR", "great britain": "GBR",
@@ -34,13 +47,17 @@ COUNTRY_ALIASES = {
 
 
 def _normalize(text):
+    """Lower case, no accents, no punctuation, so "Côte d'Ivoire" matches "cote d ivoire"."""
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
 @lru_cache(maxsize=1)
 def _country_index():
-    """[(normalized name, ISO3)] from geoBoundaries, cached on disk for 30 days."""
+    """Every country geoBoundaries knows, as a list of (simplified name, ISO3 code).
+
+    The list is kept on disk for 30 days. If it can't be refreshed, the old copy is used.
+    """
     fresh = (os.path.exists(COUNTRY_INDEX_PATH)
              and time.time() - os.path.getmtime(COUNTRY_INDEX_PATH) < COUNTRY_INDEX_MAX_AGE)
     if not fresh:
@@ -58,9 +75,12 @@ def _country_index():
 
 @lru_cache(maxsize=256)
 def get_country_codes(country_name):
-    """Returns (alpha2, alpha3); alpha2 is None (only ISO3 is used downstream).
-    Exact matches win so that 'Niger' doesn't resolve to Nigeria or 'Guinea' to
-    Papua New Guinea. Raises ValueError for non-countries such as city names."""
+    """Finds the ISO code for a country name. Returns (None, ISO3).
+
+    The first value used to be the two letter code. Nothing needs it any more, so it's always
+    None. Exact matches are tried first, so "Niger" doesn't become Nigeria and "Guinea" doesn't
+    become Papua New Guinea. Raises ValueError if the name isn't a country, for example a city.
+    """
     wanted = _normalize(country_name)
     if wanted in COUNTRY_ALIASES:
         return None, COUNTRY_ALIASES[wanted]
@@ -71,8 +91,9 @@ def get_country_codes(country_name):
         if wanted == name or wanted == iso3.lower() or compact == name.replace(" ", ""):
             return None, iso3
 
-    # "Russia" → "Russian Federation", "Iran" → "Iran (Islamic Republic of)", "Tanzania" → "United Republic of Tanzania"
-    # Word-prefix match only, so city names like "Mexico City" still fall through to OSM.
+    # Next, look for the name as a whole word inside an official name. That's how "Russia" finds
+    # "Russian Federation" and "Tanzania" finds "United Republic of Tanzania". It has to match from
+    # the start of a word, so a city like "Mexico City" isn't mistaken for Mexico.
     candidates = [(name, iso3) for name, iso3 in index if f" {wanted}" in f" {name}"] if len(wanted) >= 4 else []
     if candidates:
         return None, min(candidates, key=lambda c: len(c[0]))[1]
@@ -80,20 +101,24 @@ def get_country_codes(country_name):
 
 
 def _bounds_of(gdf):
+    """The extent of the shapes as [south, north, west, east], the order the rest of the app uses."""
     bounds = gdf.total_bounds
     return [float(bounds[1]), float(bounds[3]), float(bounds[0]), float(bounds[2])]
 
 
 def _safe_name(text):
+    """A place name turned into something safe to use in a file name."""
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_") or "place"
 
 
 def plot_boundary(gdf, country_name, prefix, source_path=None):
+    """Draws the outline as a PNG preview for the node and returns its file name."""
     os.makedirs("outputs", exist_ok=True)
     output_filename = f"{prefix}_boundary.png"
     output_path = os.path.join("outputs", output_filename)
 
-    # Plotting large admin datasets is the slow part; reuse the previous render if the data is unchanged.
+    # Drawing a country split into hundreds of districts is slow, so if the picture already
+    # exists and the data hasn't changed since, reuse it.
     if source_path and is_fresh(output_path, source_path):
         print(f"Boundary plot reused: {output_path}")
         return output_filename
@@ -111,17 +136,23 @@ def plot_boundary(gdf, country_name, prefix, source_path=None):
 
 
 def _write_geojson(gdf, path):
+    """Saves shapes as GeoJSON, rounded to 6 decimal places (about 10 cm) to keep files small."""
     if os.path.exists(path):
         os.remove(path)
     gdf.to_file(path, driver="GeoJSON", COORDINATE_PRECISION=6)
 
 
 def fetch_geoboundaries(country_name, admin_level=0):
+    """Country borders from geoBoundaries.
+
+    admin_level 0 is the whole country, 1 its regions, 2 districts and so on. If the name turns
+    out not to be a country, this falls back to the OpenStreetMap outline instead.
+    """
     print(f"Fetching GeoBoundaries for {country_name} at admin level {admin_level}...")
     try:
         alpha2, alpha3 = get_country_codes(country_name)
     except ValueError:
-        print(f"'{country_name}' not a country — falling back to OSMnx")
+        print(f"'{country_name}' is not a country, so trying OpenStreetMap instead")
         return fetch_city_boundary(country_name)
 
     os.makedirs("files", exist_ok=True)
@@ -151,12 +182,17 @@ def fetch_geoboundaries(country_name, admin_level=0):
 
 
 def fetch_gadm(country_name, admin_level=0):
+    """Country borders from GADM 4.1.
+
+    GADM sends a zip of shapefiles for all levels at once. The zip is downloaded once and the
+    level we need is converted to GeoJSON.
+    """
     print(f"Fetching GADM for {country_name} at admin level {admin_level}...")
     alpha2, alpha3 = get_country_codes(country_name)
 
     os.makedirs("files", exist_ok=True)
     extract_path = os.path.join("files", f"gadm_{alpha3}")
-    # GeoJSON (rather than the raw .shp) so the frontend map can display it directly.
+    # Converted to GeoJSON because that's what the map in the browser can show.
     geojson_path = os.path.join(extract_path, f"gadm41_{alpha3}_{admin_level}.geojson")
 
     if not os.path.exists(geojson_path):
@@ -166,6 +202,7 @@ def fetch_gadm(country_name, admin_level=0):
             response = requests.get(url, headers=HEADERS, timeout=120, stream=True)
             if response.status_code != 200:
                 raise ValueError(f"GADM returned {response.status_code}")
+            # Download to a temporary name first, so a broken download never looks finished
             part_path = zip_path + ".part"
             with open(part_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1 << 16):
@@ -195,24 +232,33 @@ def fetch_gadm(country_name, admin_level=0):
 
 
 def _geocode_place(place):
-    """Polygon for a place picked in the Location dropdown (exact OSM object, no name guessing)."""
+    """The outline of a place picked from the Place node's list.
+
+    We ask OpenStreetMap for that exact object by its id, rather than searching by name again.
+    """
     if place.get("osmType") in ("relation", "way"):
         return ox.geocode_to_gdf(place["id"], by_osmid=True)
-    # Picked a point (many towns are mapped only as a centre node): use the
-    # smallest city/district outline that contains it.
+    # Many towns are only mapped as a single point in their centre, which has no outline.
+    # In that case use the smallest town or district area that contains the point.
     area_id, area_name = enclosing_area(place["lat"], place["lon"])
     if not area_id:
         raise ValueError(f"OpenStreetMap has no boundary polygon around '{place['name']}'. "
-                         "Pick a district or region entry from the Location list instead.")
-    print(f"'{place['name']}' is a point in OpenStreetMap — using enclosing area: {area_name}")
+                         "Pick a district or region from the Place list instead.")
+    print(f"'{place['name']}' is a point in OpenStreetMap, so using the area around it: {area_name}")
     return ox.geocode_to_gdf(area_id, by_osmid=True)
 
 
 def fetch_city_boundary(city_name, place=None):
+    """The OpenStreetMap outline of a town, city, district, park or other named area.
+
+    If `place` is given (the entry picked in the Place node), that exact place is used.
+    Otherwise the name is searched for and the first match is used.
+    """
     print(f"Fetching city boundary for {city_name}...")
     os.makedirs("files", exist_ok=True)
     os.makedirs("outputs", exist_ok=True)
-    # The OSM id keeps same-named places (e.g. two "Tema"s) from sharing a cache file.
+    # Adding the OpenStreetMap id to the file name stops two places with the same name (there
+    # is more than one Tema, for example) from sharing a saved file.
     safe_name = _safe_name(city_name) + (f"_{place['id']}" if place else "")
     geojson_path = os.path.join("files", f"{safe_name}_boundary.geojson")
 

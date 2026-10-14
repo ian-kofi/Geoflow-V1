@@ -3,8 +3,14 @@ import Icon from './Icon.jsx';
 import { CATEGORIES, NODE_TYPES } from '../nodes/registry.js';
 import { TEMPLATES } from '../workflow/templates.js';
 
+// The type of data carried when a node is dragged from the palette, so the canvas knows what was dropped
 export const DRAG_MIME = 'application/geoflow-node';
 
+/**
+ * The left sidebar: the Make a map button, every node type grouped by category (drag one
+ * onto the canvas, or click to add it), the example templates, and buttons to export, import
+ * or clear the workflow. It can be collapsed to a narrow strip of icons.
+ */
 export default function Sidebar({ collapsed, onToggleCollapsed, onMakeMap, onAdd, onTemplate, onExport, onImport, onClear }) {
   const importRef = useRef(null);
   const groups = Object.entries(CATEGORIES).map(([key, cat]) => ({

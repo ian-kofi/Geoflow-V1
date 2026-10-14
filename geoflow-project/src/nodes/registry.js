@@ -1,24 +1,43 @@
+/**
+ * Every node type and how it appears in the app.
+ *
+ * Each entry describes one node type:
+ *   label, description   the name and help text shown in the sidebar and Inspector
+ *   category             which sidebar group it's listed under (see CATEGORIES)
+ *   icon                 an icon name from components/Icon.jsx
+ *   defaults             the settings a new node starts with
+ *   params               the settings shown on the node. Each `key` is sent to the backend as a
+ *                        form field of that name, so it has to match what the backend reads.
+ *   summary              a one line description of the current settings, shown under the title
+ *   inputs               named inputs, for nodes that need to tell their inputs apart
+ *   clientOnly           the node runs in the browser without asking the backend (Place)
+ *   hasInput, hasOutput  set to false to hide the node's input or output connector
+ *   resizable            the node can be resized, with its starting and smallest sizes
+ *
+ * The analysis nodes are defined in spatialNodes.js and added at the end.
+ */
 import { LAYER_COLORS } from '../config.js';
 import { SPATIAL_NODE_TYPES } from './spatialNodes.js';
 
-// Plain-language group names; the GIS term is kept in each node's description.
+// Sidebar groups, named in plain language. The GIS term for each node is in its description.
 export const CATEGORIES = {
   input: { label: 'Start here', color: '#38bdf8' },
   source: { label: 'Get map data', color: '#a78bfa' },
-  terrain: { label: 'Hills & terrain', color: '#f97316' },
+  terrain: { label: 'Hills and terrain', color: '#f97316' },
   raster: { label: 'Analyse images', color: '#22c55e' },
   vector: { label: 'Shape tools', color: '#ec4899' },
-  process: { label: 'Style & combine', color: '#f59e0b' },
+  process: { label: 'Style and combine', color: '#f59e0b' },
   output: { label: 'Result', color: '#34d399' },
 };
 
+// The Map Features options, as [value sent to the backend, label]
 const LAYER_OPTIONS = [
   ['roads', 'All roads'],
-  ['highways', 'Main roads & highways'],
+  ['highways', 'Main roads and highways'],
   ['railways', 'Railways'],
-  ['waterways', 'Rivers & streams'],
-  ['rivers', 'Main rivers & canals'],
-  ['buildings', 'Buildings (towns & cities only)'],
+  ['waterways', 'Rivers and streams'],
+  ['rivers', 'Main rivers and canals'],
+  ['buildings', 'Buildings (towns and cities only)'],
 ];
 
 const BOUNDARY_SOURCES = [
@@ -34,12 +53,9 @@ const DETAIL_LEVELS = [
   [3, 'Sub-districts'],
 ];
 
+/** The label for a value in a list of [value, label] options. */
 const label = (options, value) => options.find(([v]) => String(v) === String(value))?.[1] ?? value;
 
-/**
- * Every node type in one place. `params` keys are sent to the backend as form
- * fields with exactly these names, so they must match main.py.
- */
 export const NODE_TYPES = {
   LocationNode: {
     label: 'Place',
@@ -49,7 +65,7 @@ export const NODE_TYPES = {
     hasInput: false,
     description: 'Where your map is. Search for a country, region, city or town and pick the right one from the list.',
     defaults: { location: '', place: null },
-    params: [{ key: 'location', label: 'Place', type: 'place', placeholder: 'Search e.g. Tema, Ghana, Nairobi' }],
+    params: [{ key: 'location', label: 'Place', type: 'place', placeholder: 'Search, for example Tema, Ghana or Nairobi' }],
     summary: (d) => (d.place ? `${d.place.name}${d.place.country && !d.place.isCountry ? `, ${d.place.country}` : ''}` : d.location || 'No place set'),
   },
   BoundaryNode: {
@@ -57,7 +73,7 @@ export const NODE_TYPES = {
     category: 'source',
     icon: 'boundary',
     description:
-      'The outline (border) of your place, optionally split into regions or districts. GIS term: administrative boundary (geoBoundaries / GADM / OpenStreetMap).',
+      'The outline (border) of your place, which can be split into regions or districts. GIS term: administrative boundary, from geoBoundaries, GADM or OpenStreetMap.',
     defaults: { boundarySource: 'geoboundaries', boundaryAdminLevel: 0 },
     params: [
       {
@@ -73,7 +89,7 @@ export const NODE_TYPES = {
         type: 'segmented',
         options: DETAIL_LEVELS,
         hidden: (d) => d.boundarySource === 'city',
-        hint: 'Country = one outline. Regions/Districts = the country divided into its parts (GIS: ADM0–ADM3).',
+        hint: 'Country gives one outline. Regions and Districts divide the country into its parts (GIS levels ADM0 to ADM3).',
       },
     ],
     summary: (d) =>
@@ -119,7 +135,7 @@ export const NODE_TYPES = {
     category: 'source',
     icon: 'file',
     description:
-      'A simple drawing of the country’s shape (vector SVG from Natural Earth). You can upload your own shapefile folder instead.',
+      'A simple drawing of the country’s shape (a vector SVG from Natural Earth). You can upload your own shapefile folder instead.',
     defaults: {},
     params: [{ key: 'geoFiles', label: 'Your own shapefile folder', type: 'folder' }],
     summary: () => 'Country shape drawing',
@@ -146,7 +162,7 @@ export const NODE_TYPES = {
     category: 'process',
     icon: 'composite',
     description:
-      'Stacks the outline, satellite photo and map features (roads, rivers…) into one finished picture. Connect them all to this node.',
+      'Puts the outline, a satellite photo or analysis result, and map features such as roads or rivers together in one finished picture. Connect them all to this node.',
     defaults: { alpha: 0.6 },
     params: [{ key: 'alpha', label: 'How strongly features show', type: 'slider', min: 0, max: 1, step: 0.05, percent: true }],
     summary: (d) => `Features ${Math.round(d.alpha * 100)}%`,
@@ -157,25 +173,31 @@ export const NODE_TYPES = {
     icon: 'image',
     hasOutput: false,
     resizable: { width: 320, height: 380, minWidth: 220, minHeight: 200 },
-    description: 'Shows your finished map. Download it as a JPEG with a title and colour key. Drag its corners to resize.',
+    description: 'Shows your finished map. Download it as a JPEG with a title and legend. Drag its corners to resize.',
     defaults: { title: '' },
-    params: [{ key: 'title', label: 'Map title', type: 'text', placeholder: 'Optional, e.g. Steep slopes in Akosombo' }],
+    params: [{ key: 'title', label: 'Map title', type: 'text', placeholder: 'Optional, for example Steep slopes in Akosombo' }],
     summary: (d) => d.title || 'Your finished map',
   },
   ...SPATIAL_NODE_TYPES,
 };
 
+/** The setting names of each node type. */
 export const PARAM_KEYS = Object.fromEntries(
   Object.entries(NODE_TYPES).map(([type, def]) => [type, def.params.map((p) => p.key)]),
 );
 
 let counter = 0;
+/**
+ * A new id for a node, like "slope_ab12c": the type, then part of the current time and a
+ * counter, so ids don't repeat even when several nodes are made at once.
+ */
 export function makeNodeId(type) {
   counter += 1;
   const short = type.replace('Node', '').toLowerCase();
   return `${short}_${Date.now().toString(36).slice(-4)}${counter.toString(36)}`;
 }
 
+/** A new node of the given type at `position`, with its default settings plus any in `data`. */
 export function createNode(type, position, data = {}) {
   const { resizable } = NODE_TYPES[type];
   return {

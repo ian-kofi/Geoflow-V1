@@ -3,22 +3,30 @@ import { createPortal } from 'react-dom';
 import Icon from './Icon.jsx';
 import { API_URL } from '../config.js';
 
-const SEARCH_DELAY = 450; // ms; also keeps us within Nominatim's 1 request/second policy
+// Wait this long after the last key press before searching, in milliseconds. It also keeps us
+// under Nominatim's limit of one request a second.
+const SEARCH_DELAY = 450;
 const MIN_CHARS = 2;
 
-/** "Tema, Tema Metropolitan District, Greater Accra Region, Ghana" → everything after the name */
+/**
+ * The part of a place's full name after the name itself, so for
+ * "Tema, Tema Metropolitan District, Greater Accra Region, Ghana" it's everything after "Tema, ".
+ */
 function placeContext(place) {
   const prefix = `${place.name}, `;
   return place.displayName.startsWith(prefix) ? place.displayName.slice(prefix.length) : place.displayName;
 }
 
-/**
- * Search-as-you-type place picker. Stores the typed text in `location` and the
- * picked candidate (with its unique OSM id) in `place`, so downstream nodes use
- * exactly that place rather than the first match for an ambiguous name.
- */
 export { placeContext };
 
+/**
+ * A place search box that shows matching places as you type.
+ *
+ * The typed text is passed to onTextChange and the chosen place (with its OpenStreetMap id)
+ * to onPick. Later nodes use that exact place, rather than the first match for a name that
+ * several places share. The list of matches is drawn on top of everything else, so other
+ * nodes can't cover it.
+ */
 export default function PlaceField({ id, value, place, placeholder, onTextChange, onPick, onEnter, autoFocus = false }) {
   const inputRef = useRef(null);
   const [open, setOpen] = useState(false);
@@ -56,8 +64,8 @@ export default function PlaceField({ id, value, place, placeholder, onTextChange
     };
   }, [value, open]);
 
-  // The menu lives in a portal (so other nodes can't cover it); keep it pinned
-  // under the input while the canvas pans or zooms.
+  // The list is drawn outside the node so other nodes can't cover it, which means it has to
+  // follow the search box by hand while the canvas is moved or zoomed.
   useEffect(() => {
     if (!open) return undefined;
     let frame;
@@ -82,7 +90,7 @@ export default function PlaceField({ id, value, place, placeholder, onTextChange
   };
 
   const onChange = (e) => {
-    onTextChange(e.target.value); // the caller clears any earlier pick: the text no longer matches it
+    onTextChange(e.target.value); // the caller forgets any earlier pick, since the text no longer matches it
     setOpen(true);
   };
 
@@ -152,7 +160,7 @@ export default function PlaceField({ id, value, place, placeholder, onTextChange
           >
             {status === 'loading' && results.length === 0 && <li className="gf-place-menu__status">Searching…</li>}
             {status === 'empty' && <li className="gf-place-menu__status">No places found</li>}
-            {status === 'error' && <li className="gf-place-menu__status">Place search unavailable — is the backend running?</li>}
+            {status === 'error' && <li className="gf-place-menu__status">Place search isn't working. Is the backend running?</li>}
             {results.map((candidate, i) => (
               <li
                 key={candidate.id}
@@ -161,7 +169,8 @@ export default function PlaceField({ id, value, place, placeholder, onTextChange
                 aria-selected={i === active}
                 className={i === active ? 'is-active' : ''}
                 onMouseEnter={() => setActive(i)}
-                // mousedown + preventDefault so the input's blur doesn't close the menu first
+                // Picking on mouse down (and cancelling the default) stops the search box losing
+                // focus first, which would close the list before the click registers
                 onMouseDown={(e) => {
                   e.preventDefault();
                   pick(candidate);

@@ -1,6 +1,9 @@
 import { createContext, useContext } from 'react';
 
-/** Editor-level UI actions that nodes can trigger, e.g. opening the Map tab on an area. */
+/**
+ * Actions on the editor as a whole that a node can trigger from inside itself, such as
+ * opening the Map tab zoomed to its result. App.jsx provides the real functions.
+ */
 export const UiContext = createContext({ showOnMap: () => {} });
 
 export const useUi = () => useContext(UiContext);

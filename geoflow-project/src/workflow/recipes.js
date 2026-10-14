@@ -1,10 +1,14 @@
+/**
+ * The choices in the Make a map assistant (Satellite photo, Hills and valleys, Flood risk and
+ * so on). Each `build` makes an ordinary workflow for the picked place, so people can open it
+ * up, see how it works and change it. The assistant then runs its Final Map node.
+ *
+ * Each recipe has a title, a description and a rough time shown in the dialog, and an icon
+ * name from components/Icon.jsx.
+ */
 import { createNode } from '../nodes/registry.js';
 
-/**
- * Ready-made analyses for the "Make a map" assistant: each builds a small,
- * normal workflow (so people can open it up and learn from it) for a picked place.
- */
-
+/** A connection between two nodes, optionally into a named input such as "mask". */
 function edge(source, target, targetHandle) {
   return {
     id: `e_${source.id}_${target.id}${targetHandle ? `_${targetHandle}` : ''}`,
@@ -14,32 +18,34 @@ function edge(source, target, targetHandle) {
   };
 }
 
-const COL = 330;
+const COL = 330;   // horizontal space between columns of nodes on the canvas
 
-/** Outline settings that suit the place: country borders, or the town's own outline. */
+/** Outline settings that suit the place: official borders for a country, or the town's own outline. */
 function outlineFor(place, detail = 0) {
   return place.isCountry ? { boundarySource: 'geoboundaries', boundaryAdminLevel: detail } : { boundarySource: 'city' };
 }
 
-/** Satellite detail level (map zoom) that gives a sharp picture of the place without taking forever. */
+/** A satellite zoom level that gives a sharp picture of the place without taking forever. Bigger places get a lower zoom. */
 function zoomFor(place) {
   const [s, n, w, e] = place.bbox ?? [0, 1, 0, 1];
   const span = Math.max(n - s, e - w, 0.005);
   return Math.min(15, Math.max(5, Math.round(Math.log2(360 / span)) + 2));
 }
 
-/** Common start: Place → Outline. */
+/** How every recipe starts: a Place node connected to an Outline node. */
 function start(place, detail = 0) {
   const location = createNode('LocationNode', { x: 0, y: 120 }, { location: place.name, place });
   const outline = createNode('BoundaryNode', { x: COL, y: 120 }, outlineFor(place, detail));
   return { location, outline };
 }
 
+/** How every recipe ends: a Final Map node after `last`, with the map's title. */
 function finish(nodes, edges, last, title) {
   const output = createNode('OutputImageNode', { x: last.position.x + COL, y: 60 }, { title });
   return { nodes: [...nodes, output], edges: [...edges, edge(last, output)], outputId: output.id };
 }
 
+/** A satellite photo with one kind of map feature (roads, rivers and so on) drawn on top. */
 function featuresOnPhoto(place, layerType, title) {
   const { location, outline } = start(place);
   const photo = createNode('SatelliteNode', { x: COL * 2, y: -60 }, { satelliteZoom: zoomFor(place), clipToBoundary: true });
@@ -53,6 +59,7 @@ function featuresOnPhoto(place, layerType, title) {
   );
 }
 
+/** A ground height node fed by the outline, used by every terrain recipe. */
 function elevation(place, location, outline) {
   const dem = createNode('StacNode', { x: COL * 2, y: 120 }, { collection: 'cop-dem-glo-30' });
   return { dem, edges: [edge(location, outline), edge(outline, dem)] };
@@ -73,7 +80,7 @@ export const RECIPES = [
   },
   {
     id: 'terrain',
-    title: 'Hills & valleys',
+    title: 'Hills and valleys',
     description: 'Ground height in colour with shaded hills, like a relief map.',
     icon: 'mountain',
     time: 'about 15 seconds',
@@ -86,14 +93,14 @@ export const RECIPES = [
         [location, outline, dem, cut, colours],
         [...edges, edge(dem, cut, 'raster'), edge(outline, cut, 'mask'), edge(cut, colours)],
         colours,
-        `Hills & valleys · ${place.name}`,
+        `Hills and valleys · ${place.name}`,
       );
     },
   },
   {
     id: 'slopes',
     title: 'Steep slopes',
-    description: 'Flat, gentle and steep ground, e.g. for landslide or building risk.',
+    description: 'Flat, gentle and steep ground, for things like landslide or building risk.',
     icon: 'activity',
     time: 'about 20 seconds',
     build: (place) => {
@@ -119,25 +126,26 @@ export const RECIPES = [
     build: (place) => {
       const { location, outline } = start(place);
       const { dem, edges } = elevation(place, location, outline);
-      // Mapped rivers, so big rivers that rise outside the area still count (York's Ouse).
+      // Rivers from OpenStreetMap, so big rivers that start outside the area still count (like York's Ouse).
       const rivers = createNode('LayerNode', { x: COL * 2, y: -220 }, { layerType: 'rivers' });
-      // HAND is computed on the full rectangle (fewer edge effects), then cut to the outline.
-      // Plus streams traced from the terrain where it has enough relief for them to be reliable.
+      // HAND is worked out on the whole rectangle around the place (so the edges are less of a problem)
+      // and cut to the outline afterwards. Streams traced from the terrain are added where the land has
+      // enough relief for them to be reliable.
       const hand = createNode('HandNode', { x: COL * 3, y: -40 }, { minArea: 1, terrainStreams: 'auto' });
       const handCut = createNode('ClipRasterNode', { x: COL * 4, y: -40 });
       const slope = createNode('SlopeNode', { x: COL * 3, y: 300 });
       const water = createNode('StacNode', { x: COL * 2, y: 480 }, { collection: 'jrc-gsw' });
       const overlay = createNode('WeightedOverlayNode', { x: COL * 5, y: 120 }, {
         resultName: 'Flood susceptibility',
-        weightA: 5, riskA: 'low', rangeA: '0, 10',    // 0 m above the river = full risk, 10 m+ = none
+        weightA: 5, riskA: 'low', rangeA: '0, 10',    // 0 m above the river is full risk, 10 m or more is none
         weightB: 2, riskB: 'low', rangeB: '0, 8',     // flat ground holds water
-        weightC: 3, riskC: 'high', rangeC: '0, 25',   // underwater in ≥25% of observations since 1984 = full
+        weightC: 3, riskC: 'high', rangeC: '0, 25',   // underwater in 25% or more of observations since 1984 is full risk
         weightD: 0,
       });
       const zones = createNode('ReclassifyNode', { x: COL * 6, y: 120 }, {
         method: 'manual', breaks: '0.4, 0.65', labels: 'Low, Moderate, High',
       });
-      // Flood maps conventionally use blues: pale = low, dark = high.
+      // Flood maps usually use blues, pale for low and dark for high.
       const colours = createNode('ColourMapNode', { x: COL * 7, y: 120 }, { colormap: 'YlGnBu' });
       return finish(
         [location, outline, dem, rivers, hand, handCut, slope, water, overlay, zones, colours],
@@ -164,9 +172,9 @@ export const RECIPES = [
   {
     id: 'green',
     title: 'How green it is',
-    description: 'Plant health from recent satellite photos: green = lush, red = bare or built-up.',
+    description: 'Plant health from recent satellite photos: green is lush, red is bare or built up.',
     icon: 'leaf',
-    time: '1–3 minutes for a town or district, around 5 minutes for a whole country',
+    time: '1 to 3 minutes for a town or district, around 5 minutes for a whole country',
     build: (place) => {
       const { location, outline } = start(place);
       const photos = createNode('StacNode', { x: COL * 2, y: 120 }, { collection: 'sentinel-2-l2a' });
@@ -185,16 +193,16 @@ export const RECIPES = [
     title: 'Roads',
     description: 'Roads drawn over a satellite photo.',
     icon: 'layers',
-    time: '1–3 minutes',
+    time: '1 to 3 minutes',
     build: (place) => featuresOnPhoto(place, place.isCountry ? 'highways' : 'roads', `Roads · ${place.name}`),
   },
   {
     id: 'rivers',
-    title: 'Rivers & streams',
+    title: 'Rivers and streams',
     description: 'Rivers and streams drawn over a satellite photo.',
     icon: 'waves',
-    time: '1–3 minutes',
-    build: (place) => featuresOnPhoto(place, 'waterways', `Rivers & streams · ${place.name}`),
+    time: '1 to 3 minutes',
+    build: (place) => featuresOnPhoto(place, 'waterways', `Rivers and streams · ${place.name}`),
   },
   {
     id: 'contours',
@@ -217,7 +225,7 @@ export const RECIPES = [
   },
   {
     id: 'borders',
-    title: 'Regions & borders',
+    title: 'Regions and borders',
     description: 'The outline of your place, divided into its regions (for countries).',
     icon: 'boundary',
     time: 'about 5 seconds',

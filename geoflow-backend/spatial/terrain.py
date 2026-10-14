@@ -1,5 +1,11 @@
-"""Terrain derivatives from a DEM, using Horn's (1981) 3×3 method — the same
-formulas as ArcGIS / GDAL, so results are comparable with desktop GIS."""
+"""Terrain measurements worked out from a DEM (a grid of ground heights).
+
+Slope, aspect and hillshade use Horn's (1981) method, which looks at each cell's eight
+neighbours. ArcGIS and GDAL use the same formulas, so results can be compared with desktop GIS.
+
+Every function takes a Raster whose first band is the height in metres, on a grid measured in
+metres (stac.py always delivers the DEM like that).
+"""
 import math
 
 import contourpy
@@ -10,11 +16,18 @@ from shapely.geometry import LineString
 from .common import InputError
 from .raster_io import pixel_size_m
 
-MAX_CONTOUR_LEVELS = 250
+MAX_CONTOUR_LEVELS = 250   # more lines than this would be unreadable and slow
 
 
 def _window(z):
-    """The 8 neighbours of every cell (edges repeat the border value)."""
+    """The eight neighbours of every cell, as eight shifted copies of the grid.
+
+    The names follow the usual layout:
+        a b c
+        d e f      (e is the cell itself)
+        g h i
+    Cells on the edge reuse their own value for the missing neighbours.
+    """
     p = np.pad(z, 1, mode="edge")
     return {
         "a": p[:-2, :-2], "b": p[:-2, 1:-1], "c": p[:-2, 2:],
@@ -24,7 +37,11 @@ def _window(z):
 
 
 def horn_gradient(dem, z_factor=1.0):
-    """(dz/dx, dz/dy) per Horn, with dy measured down the rows (ESRI convention)."""
+    """How fast the height changes going east (dz/dx) and going down the rows (dz/dy), using Horn's method.
+
+    Measuring dy down the rows matches how ArcGIS does it. z_factor scales the heights, for
+    exaggerating relief.
+    """
     z = dem.data[0] * z_factor
     n = _window(z)
     dx, dy = pixel_size_m(dem)
@@ -34,13 +51,18 @@ def horn_gradient(dem, z_factor=1.0):
 
 
 def slope(dem, units="degrees", z_factor=1.0):
+    """How steep the ground is, in degrees (0 is flat, 90 a cliff) or percent (rise over run times 100)."""
     dzdx, dzdy = horn_gradient(dem, z_factor)
     rise = np.hypot(dzdx, dzdy)
     return rise * 100 if units == "percent" else np.degrees(np.arctan(rise))
 
 
 def aspect(dem):
-    """Compass direction the slope faces, degrees clockwise from north; flat cells are NaN."""
+    """Which compass direction each slope faces, in degrees clockwise from north.
+
+    0 is north, 90 east, 180 south, 270 west. Perfectly flat cells face no direction, so they
+    are left empty (NaN).
+    """
     dzdx, dzdy = horn_gradient(dem)
     angle = np.degrees(np.arctan2(dzdy, -dzdx))
     out = np.where(angle < 0, 90 - angle, np.where(angle > 90, 450 - angle, 90 - angle))
@@ -49,9 +71,14 @@ def aspect(dem):
 
 
 def hillshade(dem, azimuth=315.0, altitude=45.0, z_factor=1.0):
+    """Shaded relief: how brightly each slope would be lit by a sun in a given position.
+
+    azimuth is the sun's compass direction (315 is the north west, the usual choice) and
+    altitude its height above the horizon in degrees. Returns 0 (dark) to 255 (fully lit).
+    """
     dzdx, dzdy = horn_gradient(dem, z_factor)
     zenith = math.radians(90 - altitude)
-    azimuth_math = math.radians((360 - azimuth + 90) % 360)
+    azimuth_math = math.radians((360 - azimuth + 90) % 360)   # compass angle to maths angle
     slope_rad = np.arctan(np.hypot(dzdx, dzdy))
     aspect_rad = np.arctan2(dzdy, -dzdx)
     aspect_rad = np.where(aspect_rad < 0, aspect_rad + 2 * math.pi, aspect_rad)
@@ -61,15 +88,22 @@ def hillshade(dem, azimuth=315.0, altitude=45.0, z_factor=1.0):
 
 
 def ruggedness(dem):
-    """Terrain Ruggedness Index (Riley et al. 1999): sqrt of the summed squared
-    elevation differences between a cell and its 8 neighbours, in elevation units."""
+    """How rough the ground is: the Terrain Ruggedness Index (Riley et al. 1999).
+
+    For each cell, take the height difference to each of its eight neighbours, square them,
+    add them up and take the square root. The result is in metres. Flat ground is near 0.
+    """
     z = dem.data[0]
     n = _window(z)
     return np.sqrt(sum((n[k] - z) ** 2 for k in "abcdfghi"))
 
 
 def contours(dem, interval):
-    """Contour lines every `interval` elevation units, as a GeoDataFrame in EPSG:4326."""
+    """Lines joining places of equal height, one every `interval` metres.
+
+    Returns them as a GeoDataFrame in latitude and longitude, with each line's height in the
+    "elevation" column.
+    """
     z = dem.data[0]
     finite = z[np.isfinite(z)]
     if finite.size == 0:
@@ -88,7 +122,9 @@ def contours(dem, interval):
         for line in generator.lines(level):
             if len(line) < 2:
                 continue
-            cols, rws = line[:, 0] + 0.5, line[:, 1] + 0.5      # cell centres
+            # contourpy works in grid positions; add half a cell to get cell centres, then
+            # turn those into map coordinates with the raster's transform
+            cols, rws = line[:, 0] + 0.5, line[:, 1] + 0.5
             xs = t.c + t.a * cols + t.b * rws
             ys = t.f + t.d * cols + t.e * rws
             rows.append({"elevation": float(level), "geometry": LineString(np.column_stack([xs, ys]))})

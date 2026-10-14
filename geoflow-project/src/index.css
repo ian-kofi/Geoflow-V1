@@ -1,3 +1,5 @@
+/* GeoFlow's styles. Colours are CSS variables set for light mode in :root and for dark mode
+   under [data-theme='dark'], so every rule below works in both. */
 :root {
   --bg: #fff;
   --panel: #fafafa;
@@ -335,7 +337,7 @@ li.gf-place-menu__status {
   cursor: default;
 }
 
-/* "Make a map" assistant */
+/* Make a map assistant */
 .gf-dialog-backdrop {
   position: fixed;
   inset: 0;
@@ -517,7 +519,7 @@ li.gf-place-menu__status {
   background: var(--primary-soft);
 }
 
-/* Sun direction / height dials (Hillshade) */
+/* Sun direction and height dials (Shaded Relief) */
 .gf-dial {
   display: flex;
   align-items: center;
@@ -868,7 +870,7 @@ kbd {
   padding: 8px;
   border-bottom: 1px solid var(--hover);
 }
-/* Resizable nodes (Output): fill the size React Flow gives the node; the preview stretches. */
+/* Resizable nodes (Final Map) fill the size React Flow gives them, and the preview stretches to match. */
 .gf-node--resizable {
   display: flex;
   flex-direction: column;
@@ -896,7 +898,7 @@ kbd {
   border-color: var(--primary);
 }
 
-/* Named input handles (e.g. Data / Mask): label sits outside the node, left of the dot. */
+/* Named inputs (like Data and Mask) have their label outside the node, to the left of the dot. */
 .gf-handle__label {
   position: absolute;
   right: 14px;
@@ -1084,7 +1086,7 @@ kbd {
 .gf-preview--large {
   aspect-ratio: 1;
 }
-/* Absolutely positioned so a tall image can't stretch its box past the aspect ratio. */
+/* Positioned absolutely so a tall image can't stretch its box out of shape. */
 .gf-preview img {
   position: absolute;
   inset: 0;
@@ -1449,7 +1451,7 @@ kbd {
 .gf-canvas__map {
   position: absolute;
   inset: 0;
-  z-index: 4; /* above the nodes, below React Flow panels (the toolbar) */
+  z-index: 4; /* above the nodes, but below React Flow's panels (the toolbar) */
   display: flex;
   background: var(--bg);
 }
@@ -1511,7 +1513,7 @@ kbd {
   color: var(--text);
 }
 
-/* Collapsed sidebar: icon-only rail. Small screens always use it. */
+/* The collapsed sidebar is a narrow strip of icons. Small screens always use it. */
 
 .is-sidebar-collapsed .gf-brand__mark,
 .is-sidebar-collapsed .gf-brand__text,

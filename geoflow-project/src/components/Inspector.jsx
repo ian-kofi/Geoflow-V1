@@ -1,3 +1,7 @@
+/**
+ * The panel on the right. The Inspector tab shows the selected node's settings, result,
+ * legend, details and download buttons. The Map tab shows every result on an interactive map.
+ */
 import { lazy, Suspense, useMemo } from 'react';
 import Icon from './Icon.jsx';
 import ParamFields from './ParamFields.jsx';
@@ -8,11 +12,16 @@ import { downloadFile, exportJpeg, fileNameFromUrl, formatBounds, jpegOptions } 
 import { useUi } from '../uiContext.js';
 import Legend, { formatValue } from './Legend.jsx';
 
-// maplibre is ~800 KB; only load it when a map is opened.
+// The map library is about 800 KB, so it's only loaded when a map is first opened.
 export const MapPreview = lazy(() => import('./MapPreview.jsx'));
 
+/** A link without its "?v=..." version part, so two versions of the same file count as the same. */
 const stripVersion = (url) => url?.split('?')[0];
 
+/**
+ * Every result on the canvas that can go on the map, as a list of map layers: satellite photos,
+ * outlines, map features, analysis results and other shapes.
+ */
 export function collectMapLayers(nodes) {
   const layers = [];
   const seen = new Set();
@@ -25,7 +34,8 @@ export function collectMapLayers(nodes) {
       layers.push({
         id: `sat-${node.id}`,
         kind: 'imagery',
-        // Clipped tiles come from the backend; otherwise plain Esri tiles limited to the bounds.
+        // Tiles cut to the outline come from the backend. Otherwise the map uses ordinary Esri
+        // tiles, limited to the photo's area.
         tiles: r.satelliteTilesUrl ?? null,
         url: r.outputImageUrl,
         bounds: r.satelliteBounds,
@@ -33,7 +43,8 @@ export function collectMapLayers(nodes) {
         label: `Satellite imagery${r.satelliteTilesUrl ? ' (clipped)' : ''} · ${r.location ?? node.id}`,
       });
     }
-    // Polygon analysis results also expose boundaryGeoJsonUrl; show those once, as a vector.
+    // Shape results from analysis nodes are also passed on as outlines. Show each file only once,
+    // and show analysis shapes as shapes rather than as outlines.
     if (r.boundaryGeoJsonUrl && !r.vectorGeoJsonUrl && !seen.has(stripVersion(r.boundaryGeoJsonUrl))) {
       seen.add(stripVersion(r.boundaryGeoJsonUrl));
       layers.push({ id: `bnd-${node.id}`, kind: 'boundary', url: r.boundaryGeoJsonUrl, bounds: r.boundaryBounds, color: BOUNDARY_COLOR, label: `${r.location ?? 'Boundary'} · ${def.summary(node.data)}` });
@@ -42,7 +53,8 @@ export function collectMapLayers(nodes) {
       layers.push({ id: `lyr-${node.id}`, kind: 'layer', layerType: r.layerType, url: r.layerGeoJsonUrl, color: LAYER_COLORS[r.layerType] ?? LAYER_COLORS.default, label: `${def.summary(node.data)} · ${r.location ?? ''}` });
     }
     if (r.rasterBounds && r.outputImageUrl && node.type !== 'OutputImageNode') {
-      // Tiles rendered on demand stay sharp when zooming; the preview image is the fallback.
+      // Tiles drawn by the backend stay sharp when you zoom in. The preview picture is used if
+      // there are no tiles.
       layers.push({ id: `ras-${node.id}`, kind: 'raster', url: r.rasterTilesUrl ?? r.outputImageUrl, tiles: r.rasterTilesUrl ?? null, bounds: r.rasterBounds, color: r.legend?.colors?.[4] ?? '#94a3b8', label: `${def.label} · ${def.summary(node.data)}` });
     }
     if (r.vectorGeoJsonUrl) {
@@ -52,8 +64,10 @@ export function collectMapLayers(nodes) {
   return layers;
 }
 
+// Colours for shape results on the map, used in turn
 const VECTOR_COLORS = ['#ec4899', '#38bdf8', '#f59e0b', '#22c55e', '#a78bfa', '#ef4444'];
 
+/** A raster result's lowest, highest, average and spread, and how much of it has data. */
 function Stats({ stats }) {
   return (
     <div className="gf-stats">
@@ -85,6 +99,7 @@ function DetailRow({ label, children }) {
   );
 }
 
+/** Everything about the selected node: description, settings, result, downloads and details. */
 function NodeDetails({ node }) {
   const { runNode, running, log } = useWorkflow();
   const { showOnMap } = useUi();
@@ -146,7 +161,7 @@ function NodeDetails({ node }) {
               type="button"
               className="gf-btn gf-btn--primary gf-btn--small"
               onClick={() => exportJpeg(jpegOptions(node, def)).catch((err) => log('error', err.message))}
-              title="A finished map picture with title, north arrow, scale and colour key"
+              title="A finished map picture with a title, north arrow, scale bar and legend"
             >
               <Icon name="download" size={13} /> Download JPEG map
             </button>
@@ -154,7 +169,7 @@ function NodeDetails({ node }) {
               type="button"
               className="gf-btn gf-btn--ghost gf-btn--small"
               onClick={() => downloadFile(imageUrl)}
-              title="Just the picture, without title or key"
+              title="Just the picture, without the title or legend"
             >
               <Icon name="download" size={13} /> Picture only
             </button>
@@ -246,6 +261,7 @@ function NodeDetails({ node }) {
   );
 }
 
+/** Shown when no node is selected: keyboard shortcuts and a count of nodes. */
 function EmptyState({ counts }) {
   return (
     <div className="gf-inspector__content gf-inspector__empty">
@@ -273,6 +289,10 @@ function EmptyState({ counts }) {
   );
 }
 
+/**
+ * The right hand panel with its two tabs. When the map has been expanded over the canvas, the
+ * Map tab shows a note with a button to bring it back.
+ */
 export default function Inspector({
   tab,
   onTabChange,

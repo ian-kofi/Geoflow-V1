@@ -1,13 +1,17 @@
-"""Validates GeoFlow's Flood risk workflow against the Environment Agency's Flood Map for Planning.
+"""Checks GeoFlow's Flood risk map against the Environment Agency's official flood zones.
 
-Runs the same node handlers the app uses, wired exactly like the "Flood risk" template, for a place in
-England, then compares the result with EA Flood Zones 2 and 3 (rivers and sea, ignoring defences):
+For a place in England, this runs the same node code the app uses, connected exactly like the
+Flood risk template. It then downloads the Environment Agency's Flood Zones 2 and 3 for the same
+area and compares the two, cell by cell, on the same 30 m grid.
 
-* ROC AUC of the continuous susceptibility score: how well it ranks flood-zone land above dry land
-  (0.5 = no better than chance, 1.0 = perfect), independent of where the class breaks fall;
-* how the Low / Moderate / High classes line up with the flood zones;
-* the same for two controls: the method before mapped rivers were added, and a naive
-  "lower ground floods first" baseline (ground height alone).
+What it measures:
+    ROC AUC     how well GeoFlow's score ranks flood zone land above dry land. 0.5 is no better
+                than guessing and 1.0 is perfect. It doesn't depend on where the class breaks are.
+    classes     how the Low, Moderate and High classes line up with the flood zones
+    comparisons the same numbers for the method from before mapped rivers were added, for
+                height above river on its own, and for a simple "lowest ground floods first" rule
+
+The results go into a JSON file and two pictures (an agreement map and the ranking curves).
 
 Usage (from geoflow-backend/):
     .venv/Scripts/python.exe -m validation.ea_flood_zones --place York --country GB \
@@ -37,10 +41,11 @@ from spatial.raster_io import read_raster
 
 EA_ITEMS = ("https://environment.data.gov.uk/spatialdata/flood-map-for-planning-flood-zones/ogc/features/v1/"
             "collections/Flood_Zones_2_3_Rivers_and_Sea/items")
-TAG = "eaval"                       # every file this script writes carries this tag, and is removed at the end
+TAG = "eaval"                       # every file this script writes has this in its name, and is deleted at the end
 CLASS_NAMES = {1: "Low", 2: "Moderate", 3: "High"}
 
-# The Flood risk template (geoflow-project/src/workflow/recipes.js), and the version before the York fix.
+# The Flood risk template's settings (from geoflow-project/src/workflow/recipes.js), and the
+# settings from before mapped rivers were added.
 VARIANTS = {
     "current": {"label": "GeoFlow (current)", "rivers": True,
                 "hand": {"minArea": "1", "terrainStreams": "auto"}, "rangeA": "0, 10"},
@@ -53,18 +58,22 @@ CLASSES = {"method": "manual", "breaks": "0.4, 0.65", "labels": "Low, Moderate, 
 
 
 def run(node_type, tag, parents=(), **params):
-    """One node, the way main.py runs it: parents are earlier outputs, tagged with the input they feed."""
+    """Runs one node the same way main.py does. `parents` are the results of earlier nodes."""
     ctx = Context(node_type=node_type, params=params, parents=list(parents), tag=f"{TAG}{tag}",
                   location=PLACE["name"], place=PLACE)
     return HANDLERS[node_type](ctx)
 
 
 def into(output, handle):
+    """A result marked as plugged into a named input, such as "mask" or "A"."""
     return {**output, "_input": handle}
 
 
 def ea_flood_zones(bounds):
-    """EA Flood Zones 2 and 3 polygons intersecting [south, north, west, east], following the API's paging."""
+    """The Environment Agency's Flood Zone 2 and 3 shapes inside [south, north, west, east].
+
+    The service sends 100 shapes at a time, so this follows its "next" links until it has them all.
+    """
     south, north, west, east = bounds
     url = f"{EA_ITEMS}?f=json&limit=100&bbox={west},{south},{east},{north}"
     features = []
@@ -78,6 +87,7 @@ def ea_flood_zones(bounds):
 
 
 def burn(gdf, raster):
+    """True for the raster's cells whose centre is inside any of the shapes."""
     if gdf.empty:
         return np.zeros(raster.data.shape[1:], dtype=bool)
     shapes = ((geom, 1) for geom in gdf.to_crs(raster.crs).geometry if geom is not None and not geom.is_empty)
@@ -86,7 +96,10 @@ def burn(gdf, raster):
 
 
 def auc(score, truth):
-    """ROC AUC via the Mann-Whitney U statistic (ties count half)."""
+    """The chance that a random flood zone cell scores higher than a random dry cell (ROC AUC).
+
+    Worked out from the ranks of the scores (the Mann-Whitney method). Equal scores count as half.
+    """
     ranks = rankdata(score)
     positives = int(truth.sum())
     negatives = truth.size - positives
@@ -94,6 +107,8 @@ def auc(score, truth):
 
 
 def roc_curve(score, truth, points=200):
+    """Points for the ROC chart: as more cells are flagged, highest score first, the share of
+    dry land flagged (false alarms) against the share of flood zone land flagged (hits)."""
     order = np.argsort(-score, kind="stable")
     hits = np.cumsum(truth[order]) / truth.sum()
     false_alarms = np.cumsum(~truth[order]) / (~truth).sum()
@@ -102,6 +117,7 @@ def roc_curve(score, truth, points=200):
 
 
 def main():
+    """Runs the check for one place and writes its results and pictures to --out."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--place", default="York")
     parser.add_argument("--country", default="GB")
@@ -118,7 +134,7 @@ def main():
     slug = re.sub(r"[^a-z0-9]+", "-", PLACE["name"].lower()).strip("-")
 
     try:
-        # ---- GeoFlow: shared inputs ------------------------------------------------------------
+        # GeoFlow: inputs shared by both versions of the method
         dem = run("StacNode", "dem", [outline], collection="cop-dem-glo-30")
         water = run("StacNode", "jrc", [outline], collection="jrc-gsw")
         slope = run("SlopeNode", "slope", [dem])
@@ -137,7 +153,7 @@ def main():
                             "hand": read_raster(hand_cut["rasterPath"]), "details": hand["details"]}
         ground = read_raster(run("ClipRasterNode", "demcut", [into(dem, "raster"), into(outline, "mask")])["rasterPath"])
 
-        # ---- Reference: EA Flood Zones on the same 30 m grid -------------------------------------
+        # The Environment Agency's flood zones, on the same 30 m grid
         grid = results["current"]["score"]
         zones = ea_flood_zones(bounds)
         print(f"EA Flood Zones: {len(zones)} polygons ({zones['flood_zone'].value_counts().to_dict()})")
@@ -147,7 +163,7 @@ def main():
         inside = np.isfinite(grid.data[0]) & np.isfinite(ground.data[0]) & np.isfinite(hand)
         cell_km2 = abs(grid.transform.a * grid.transform.e) / 1e6
 
-        # ---- Metrics ------------------------------------------------------------------------------
+        # The measurements
         report = {"place": PLACE["displayName"], "cells": int(inside.sum()), "cell_km2": cell_km2,
                   "area_km2": float(inside.sum() * cell_km2),
                   "fz3_share": float(fz3[inside].mean()), "fz23_share": float(fz23[inside].mean()),
@@ -183,7 +199,7 @@ def main():
 
 
 def figures(out, slug, name, grid, inside, fz3, fz23, results, scores, labels, report):
-    """Agreement map (GeoFlow Moderate+High vs EA Flood Zones 2/3) and ROC curves."""
+    """Draws the agreement map (GeoFlow's Moderate and High against Flood Zones 2 and 3) and the ROC chart."""
     codes = np.round(np.nan_to_num(results["current"]["classes"].data[0], nan=0)).astype(int)
     flagged = codes >= 2
     agreement = np.full(codes.shape, 0)                         # 0 = outside the area
@@ -231,6 +247,7 @@ def figures(out, slug, name, grid, inside, fz3, fz23, results, scores, labels, r
 
 
 def print_summary(report):
+    """Prints the results as Markdown tables, ready to paste into VALIDATION.md."""
     print(f"\n{report['place']}: {report['area_km2']:.0f} km², Flood Zone 3 = {100 * report['fz3_share']:.1f}%, "
           f"Zones 2+3 = {100 * report['fz23_share']:.1f}% of the area")
     print("| Method | AUC vs FZ3 | AUC vs FZ2+3 |\n|---|---|---|")
@@ -246,7 +263,7 @@ def print_summary(report):
 
 
 def cleanup():
-    """Removes the intermediate rasters, previews and styles this script wrote (all tagged TAG)."""
+    """Deletes the rasters, previews and styles this script made along the way (they all have TAG in their names)."""
     for folder in ("files", "outputs"):
         for path in glob.glob(os.path.join(folder, "**", f"*_{TAG}*"), recursive=True):
             if os.path.isfile(path):

@@ -1,4 +1,5 @@
-# Render Blueprint for the free GeoFlow demo (render.com → New → Blueprint → pick this repository).
+# Render settings for the free GeoFlow demo. To use them, go to render.com, choose New, then Blueprint,
+# and pick this repository.
 services:
   - type: web
     name: geoflow
@@ -8,14 +9,14 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      # Free instances have 512 MB of memory: process big areas at lower detail…
+      # Free servers have 512 MB of memory, so big areas are processed at lower detail
       - key: GEOFLOW_LOW_MEMORY
         value: "1"
-      # …and run one heavy step at a time (others queue).
+      # and only one heavy step runs at a time (the others wait their turn)
       - key: GEOFLOW_MAX_JOBS
         value: "1"
       - key: GEOFLOW_MAX_UPLOAD_MB
         value: "20"
-      # Build-time: show the "free demo server" notice in the app.
+      # Used when the app is built: shows the "free demo server" note
       - key: VITE_DEMO_NOTICE
         value: "1"

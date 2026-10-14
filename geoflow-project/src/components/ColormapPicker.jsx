@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 import { COLORMAP_GROUPS, COLORMAPS } from '../colormaps.js';
 
+/** A CSS gradient through the colour stops, backwards if `reverse`. */
 const gradient = (stops, reverse) => `linear-gradient(to right, ${(reverse ? [...stops].reverse() : stops).join(', ')})`;
 
-/** Dropdown of colour maps, each shown as its real gradient. */
+/**
+ * The Colour Map node's colour scale picker: a dropdown list grouped by kind, with each
+ * scale drawn as its real colours so people can see what they're choosing.
+ */
 export default function ColormapPicker({ id, value, reverse = false, onChange }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);

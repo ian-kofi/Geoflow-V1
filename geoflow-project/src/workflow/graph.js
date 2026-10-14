@@ -1,11 +1,17 @@
+// Helpers for following the connections between nodes. `edges` is React Flow's list of
+// connections, each with a `source` node id and a `target` node id.
+
+/** Ids of the nodes connected into this one. */
 export function parentsOf(id, edges) {
   return edges.filter((e) => e.target === id).map((e) => e.source);
 }
 
+/** Ids of the nodes this one is connected to. */
 export function childrenOf(id, edges) {
   return edges.filter((e) => e.source === id).map((e) => e.target);
 }
 
+/** Every node reachable from the start nodes by repeatedly calling `next`, including the start nodes. */
 function collect(startIds, next) {
   const seen = new Set();
   const stack = [...startIds];
@@ -18,24 +24,27 @@ function collect(startIds, next) {
   return seen;
 }
 
-/** The given nodes plus everything upstream of them. */
+/** The given nodes plus every node that feeds into them, directly or further back. */
 export function withAncestors(ids, edges) {
   return collect(ids, (id) => parentsOf(id, edges));
 }
 
-/** Everything downstream of the given node (excluding itself). */
+/** Every node that comes after this one, not counting itself. */
 export function descendantsOf(id, edges) {
   const all = collect([id], (n) => childrenOf(n, edges));
   all.delete(id);
   return all;
 }
 
-/** True if adding source→target would create a cycle. */
+/** True if connecting source to target would make a loop. */
 export function createsCycle(source, target, edges) {
   return source === target || descendantsOf(target, edges).has(source);
 }
 
-/** Topological order of `ids` (Kahn). Throws if the subgraph has a cycle. */
+/**
+ * Puts the nodes in an order where every node comes after the ones it depends on (a
+ * "topological sort", using Kahn's method). Throws if the connections form a loop.
+ */
 export function topoSort(ids, edges) {
   const inSet = new Set(ids);
   const relevant = edges.filter((e) => inSet.has(e.source) && inSet.has(e.target));
@@ -57,7 +66,10 @@ export function topoSort(ids, edges) {
   return order;
 }
 
-/** Stable JSON (sorted keys) so signatures don't depend on property order. */
+/**
+ * JSON with the keys always in alphabetical order. Two objects with the same contents then
+ * always give the same text, which is what the runner's fingerprints rely on.
+ */
 export function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;

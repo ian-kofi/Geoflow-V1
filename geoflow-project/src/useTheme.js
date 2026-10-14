@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { THEME_KEY } from './config.js';
 
+/** The theme to start with: the one saved last time, otherwise whatever the computer is set to. */
 function initialTheme() {
-  const applied = document.documentElement.dataset.theme; // set by the inline script in index.html
+  const applied = document.documentElement.dataset.theme; // set early by a small script in index.html
   if (applied === 'light' || applied === 'dark') return applied;
   try {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -11,7 +12,10 @@ function initialTheme() {
   }
 }
 
-/** 'light' | 'dark', remembered in localStorage and applied as <html data-theme>. */
+/**
+ * Light or dark mode. The choice is saved in the browser and set as <html data-theme="...">,
+ * which the colour variables in index.css switch on.
+ */
 export function useTheme() {
   const [theme, setTheme] = useState(initialTheme);
 
@@ -20,7 +24,7 @@ export function useTheme() {
     try {
       localStorage.setItem(THEME_KEY, theme);
     } catch {
-      /* storage unavailable — the theme just won't persist */
+      /* storage isn't available (private browsing, for example), so the theme just won't be remembered */
     }
   }, [theme]);
 

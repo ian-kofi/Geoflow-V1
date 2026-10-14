@@ -1,3 +1,10 @@
+/**
+ * The settings controls for a node, built from its `params` list in the registry. Each
+ * setting's `type` picks the control: text, number, date, select, segmented (a row of buttons),
+ * slider, toggle, file, folder, colormap, compass, elevation or place.
+ *
+ * Used both on the node itself (compact, without hints) and in the Inspector.
+ */
 import { useRef } from 'react';
 import Icon from './Icon.jsx';
 import PlaceField from './PlaceField.jsx';
@@ -6,13 +13,17 @@ import ColormapPicker from './ColormapPicker.jsx';
 import { describeFiles } from '../workflow/fileStore.js';
 import { useWorkflow } from '../workflow/WorkflowContext.jsx';
 
+/** A file size written for people, like 512 B, 40 KB or 2.5 MB. */
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-/** Folder picker (type 'folder') or file picker (type 'file'); files stay in the in-memory fileStore. */
+/**
+ * A button to choose a folder (type 'folder') or files (type 'file'). The files themselves are
+ * kept in fileStore, and the node only stores a short description of them.
+ */
 function FileField({ nodeId, param, value }) {
   const { setFiles } = useWorkflow();
   const inputRef = useRef(null);
@@ -52,6 +63,7 @@ function FileField({ nodeId, param, value }) {
   );
 }
 
+/** All of a node's settings that aren't hidden by its current choices. */
 export default function ParamFields({ nodeId, def, data, compact = false }) {
   const { updateParam, runNode, running } = useWorkflow();
   const visible = def.params.filter((p) => !p.hidden?.(data));
@@ -171,6 +183,7 @@ export default function ParamFields({ nodeId, def, data, compact = false }) {
                 place={data.place}
                 placeholder={param.placeholder}
                 onTextChange={(text) => {
+                  // Typing again means the earlier pick no longer matches, so forget it
                   set(text);
                   if (data.place) updateParam(nodeId, 'place', null);
                 }}
